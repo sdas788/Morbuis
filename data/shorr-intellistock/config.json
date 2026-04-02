@@ -1,0 +1,46 @@
+{
+  "name": "Shorr IntelliStock",
+  "appId": "com.shorr.intellistock.dev",
+  "excel": {
+    "source": "/Users/sdas/QA testing /Maestro-testing/Shorr End to End QA Plan - BLANK.xlsx"
+  },
+  "maestro": {
+    "androidPath": "/Users/sdas/QA testing /Maestro-testing/.maestro/flows",
+    "iosPath": "/Users/sdas/QA testing /Maestro-testing/.maestro/flows"
+  },
+  "env": {
+    "VMI_USERNAME": "",
+    "VMI_PASSWORD": "",
+    "CMI_USERNAME": "",
+    "CMI_PASSWORD": ""
+  },
+  "prerequisites": [
+    "Maestro CLI installed",
+    "iOS Simulator running with Shorr app installed",
+    "VPN connected for staging API access"
+  ],
+  "id": "shorr-intellistock",
+  "created": "2026-03-26",
+  "devices": [
+    {
+      "id": "ipad",
+      "name": "iPad",
+      "platform": "ios"
+    },
+    {
+      "id": "iphone",
+      "name": "iPhone",
+      "platform": "ios"
+    },
+    {
+      "id": "android-tab",
+      "name": "Android Tablet",
+      "platform": "android"
+    },
+    {
+      "id": "android-phone",
+      "name": "Android Phone",
+      "platform": "android"
+    }
+  ]
+}

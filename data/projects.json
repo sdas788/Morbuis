@@ -1,0 +1,138 @@
+{
+  "activeProject": "micro-air",
+  "projects": [
+    {
+      "id": "micro-air",
+      "name": "Micro-Air ConnectRV",
+      "created": "2026-03-26",
+      "appId": "com.microair.connectrv.dev",
+      "excel": {
+        "source": "/Users/sdas/Micro-Air/Micro Air  End to End QA Pla.xlsx"
+      },
+      "maestro": {
+        "androidPath": "/Users/sdas/Micro-Air/micro-air-testing/Andriod test",
+        "iosPath": "/Users/sdas/Micro-Air/micro-air-testing/IOS app"
+      },
+      "env": {
+        "TEST_EMAIL": "",
+        "TEST_PASSWORD": "",
+        "TEST_FIRST_NAME": "",
+        "TEST_LAST_NAME": "",
+        "TEST_HUB_NAME": "",
+        "TEST_NEW_HUB_NAME": "",
+        "TEST_WIFI_SSID": "",
+        "TEST_WIFI_PASSWORD": ""
+      },
+      "devices": [
+        {
+          "id": "ipad",
+          "name": "iPad",
+          "platform": "ios"
+        },
+        {
+          "id": "iphone",
+          "name": "iPhone",
+          "platform": "ios"
+        },
+        {
+          "id": "android-tab",
+          "name": "Android Tablet",
+          "platform": "android"
+        },
+        {
+          "id": "android-phone",
+          "name": "Android Phone",
+          "platform": "android"
+        }
+      ],
+      "prerequisites": [
+        "Maestro CLI installed",
+        "Physical device or simulator running",
+        "Gmail OTP script for account creation tests",
+        "Test Wi-Fi network accessible for hub setup tests"
+      ]
+    },
+    {
+      "name": "Shorr IntelliStock",
+      "appId": "com.shorr.intellistock.dev",
+      "excel": {
+        "source": "/Users/sdas/QA testing /Maestro-testing/Shorr End to End QA Plan - BLANK.xlsx"
+      },
+      "maestro": {
+        "androidPath": "/Users/sdas/QA testing /Maestro-testing/.maestro/flows",
+        "iosPath": "/Users/sdas/QA testing /Maestro-testing/.maestro/flows"
+      },
+      "env": {
+        "VMI_USERNAME": "",
+        "VMI_PASSWORD": "",
+        "CMI_USERNAME": "",
+        "CMI_PASSWORD": ""
+      },
+      "prerequisites": [
+        "Maestro CLI installed",
+        "iOS Simulator running with Shorr app installed",
+        "VPN connected for staging API access"
+      ],
+      "id": "shorr-intellistock",
+      "created": "2026-03-26",
+      "devices": [
+        {
+          "id": "ipad",
+          "name": "iPad",
+          "platform": "ios"
+        },
+        {
+          "id": "iphone",
+          "name": "iPhone",
+          "platform": "ios"
+        },
+        {
+          "id": "android-tab",
+          "name": "Android Tablet",
+          "platform": "android"
+        },
+        {
+          "id": "android-phone",
+          "name": "Android Phone",
+          "platform": "android"
+        }
+      ]
+    },
+    {
+      "id": "sts",
+      "name": "STS Risk Calculator",
+      "created": "2026-03-26",
+      "appId": "com.sts.calculator",
+      "excel": {
+        "source": "/Users/sdas/Downloads/STS – Standard Feature QA Test Cases.xlsx"
+      },
+      "maestro": {
+        "androidPath": "/Users/sdas/STS/sts-testing/Andriod test",
+        "iosPath": "/Users/sdas/STS/sts-testing/IOS app"
+      },
+      "env": {
+        "TEST_USERNAME": "cthomas",
+        "TEST_PASSWORD": "Test1234!"
+      },
+      "devices": [
+        {
+          "id": "iphone",
+          "name": "iPhone",
+          "platform": "ios"
+        },
+        {
+          "id": "android-phone",
+          "name": "Android Phone",
+          "platform": "android"
+        }
+      ],
+      "prerequisites": [
+        "Maestro CLI installed",
+        "iOS Simulator or Android Emulator running",
+        "STS app installed on device",
+        "Valid test credentials (see Test Users sheet in Excel)",
+        "Network access to STS web portal for account creation flow"
+      ]
+    }
+  ]
+}

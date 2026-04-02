@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "morbius",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["dist/index.js", "serve"],
+      "port": 3000,
+      "autoPort": true
+    }
+  ]
+}

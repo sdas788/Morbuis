@@ -1,0 +1,20 @@
+{
+  "id": "micro-air",
+  "name": "Micro-Air ConnectRV",
+  "created": "2026-03-26",
+  "appId": "com.microair.connectrv",
+  "excel": {
+    "source": "/Users/sdas/Micro-Air/Micro Air  End to End QA Pla.xlsx"
+  },
+  "maestro": {
+    "androidPath": "/Users/sdas/Micro-Air/micro-air-testing/Andriod test/flows",
+    "iosPath": "/Users/sdas/Micro-Air/micro-air-testing/IOS app"
+  },
+  "devices": [
+    { "id": "ipad", "name": "iPad", "platform": "ios" },
+    { "id": "iphone", "name": "iPhone", "platform": "ios" },
+    { "id": "android-tab", "name": "Android Tablet", "platform": "android" },
+    { "id": "android-phone", "name": "Android Phone", "platform": "android" }
+  ],
+  "appMap": "graph TD\n    START[\"🔴 Welcome Screen\"] -->|Sign In| LOGIN[\"Login Form\"]\n    START -->|Create Account| CREATE[\"Create Account Form\"]\n    START -->|Forgot Password| FORGOT[\"Forgot Password\"]\n\n    LOGIN -->|Valid Credentials| HOME[\"🏠 Hub Home Dashboard\"]\n    CREATE -->|Submit| MFA[\"Security Code / MFA\"]\n    MFA -->|Enter OTP| ONBOARD[\"Onboarding\"]\n    ONBOARD -->|Skip/Complete| HOME\n\n    HOME -->|Tab: Notifications| NOTIF[\"🔔 Alerts List\"]\n    HOME -->|Tab: Support| SUPPORT[\"🎧 Support Links\"]\n    HOME -->|Tab: Account| ACCOUNT[\"👤 Account Profile\"]\n    HOME -->|Tap +| ADD_HUB[\"Add Hub Flow\"]\n    HOME -->|Tap Hub ⋮| HUB_MENU{\"Hub Menu\"}\n    HOME -->|Tap Sensor| SENSOR_DETAIL[\"Sensor Detail\"]\n\n    HUB_MENU -->|Rename Hub| RENAME_HUB[\"Rename Hub Form\"]\n    HUB_MENU -->|Alert Settings| HUB_ALERTS[\"Hub Alert Settings\"]\n    HUB_MENU -->|Change WiFi| WIFI[\"WiFi Network List\"]\n    HUB_MENU -->|Add Sensor| ADD_SENSOR[\"Add Sensor Flow\"]\n    HUB_MENU -->|Remove| DELETE_HUB[\"Confirm Delete Hub\"]\n\n    SENSOR_DETAIL -->|Tap ⋮| SENSOR_MENU{\"Sensor Menu\"}\n    SENSOR_MENU -->|Alert Settings| SENSOR_ALERTS[\"Sensor Thresholds\"]\n    SENSOR_MENU -->|Rename| RENAME_SENSOR[\"Rename Sensor\"]\n    SENSOR_MENU -->|Remove| DELETE_SENSOR[\"Confirm Delete Sensor\"]\n\n    NOTIF -->|Tap ⚙| ALERT_SETTINGS[\"Alert Settings\"]\n    ALERT_SETTINGS -->|Per-Hub| HUB_ALERTS\n    ALERT_SETTINGS -->|Per-Sensor| SENSOR_ALERTS\n\n    ACCOUNT -->|Edit ✏| EDIT_PROFILE[\"Edit Profile Form\"]\n    ACCOUNT -->|Change Password| CHANGE_PW[\"Send OTP → New Password\"]\n    ACCOUNT -->|Log Out| START\n    ACCOUNT -->|Delete Account| DELETE_ACCT[\"Confirm Delete Account\"]\n\n    ADD_HUB -->|Pair| PAIR[\"Scanning for Hub\"]\n    PAIR -->|Found| WIFI_SETUP[\"Select WiFi Network\"]\n    WIFI_SETUP -->|Connected| FW_UPDATE[\"Firmware Update\"]\n    FW_UPDATE -->|Complete| CUSTOMIZE[\"Customize Hub\"]\n    CUSTOMIZE -->|Save| HOME\n\n    SUPPORT -->|Knowledge Bank| EXT1[\"External: Knowledge Bank\"]\n    SUPPORT -->|Contact Us| EXT2[\"External: Contact Us\"]\n\n    style HOME fill:#34D399,stroke:#333,color:#000\n    style LOGIN fill:#34D399,stroke:#333,color:#000\n    style CREATE fill:#34D399,stroke:#333,color:#000\n    style NOTIF fill:#34D399,stroke:#333,color:#000\n    style ACCOUNT fill:#34D399,stroke:#333,color:#000\n    style SENSOR_DETAIL fill:#34D399,stroke:#333,color:#000\n    style RENAME_HUB fill:#34D399,stroke:#333,color:#000\n    style HUB_ALERTS fill:#34D399,stroke:#333,color:#000\n    style ADD_HUB fill:#34D399,stroke:#333,color:#000\n    style SUPPORT fill:#34D399,stroke:#333,color:#000\n    style EDIT_PROFILE fill:#34D399,stroke:#333,color:#000\n    style ADD_SENSOR fill:#34D399,stroke:#333,color:#000\n    style RENAME_SENSOR fill:#34D399,stroke:#333,color:#000"
+}

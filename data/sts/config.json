@@ -1,0 +1,37 @@
+{
+  "id": "sts",
+  "name": "STS Risk Calculator",
+  "created": "2026-03-26",
+  "appId": "com.sts.calculator",
+  "excel": {
+    "source": "/Users/sdas/Downloads/STS – Standard Feature QA Test Cases.xlsx"
+  },
+  "maestro": {
+    "androidPath": "/Users/sdas/STS/sts-testing/Andriod test/flows",
+    "iosPath": "/Users/sdas/STS/sts-testing/IOS app"
+  },
+  "env": {
+    "TEST_USERNAME": "cthomas",
+    "TEST_PASSWORD": "Test1234!"
+  },
+  "devices": [
+    {
+      "id": "iphone",
+      "name": "iPhone",
+      "platform": "ios"
+    },
+    {
+      "id": "android-phone",
+      "name": "Android Phone",
+      "platform": "android"
+    }
+  ],
+  "prerequisites": [
+    "Maestro CLI installed",
+    "iOS Simulator or Android Emulator running",
+    "STS app installed on device",
+    "Valid test credentials (see Test Users sheet in Excel)",
+    "Network access to STS web portal for account creation flow"
+  ],
+  "appMap": "graph TD\n    START[\"🔴 STS Splash\"] -->|Log in to your account| TOS[\"Terms of Service\"]\n    TOS -->|Scroll + I Agree| AUTH[\"Webview OAuth\"]\n    AUTH -->|Auto-login| HOME[\"🧮 Calculators Home\"]\n\n    HOME -->|ACSD Operative| ACSD[\"ACSD Calculator\"]\n    HOME -->|Mitral Regurgitation| MITRAL[\"Mitral Calculator\"]\n    HOME -->|Isolated Tricuspid| TRICUSPID[\"Tricuspid Calculator\"]\n    HOME -->|SAVR After TAVR| SAVR[\"SAVR Calculator\"]\n    HOME -->|Multi-Valve| MULTI[\"Multi-Valve Calculator\"]\n    HOME -->|Esophagectomy| ESOPH[\"Esophagectomy Calculator\"]\n    HOME -->|Lung Cancer| LUNG[\"Lung Cancer Calculator\"]\n    HOME -->|Ascending Aorta| AORTA[\"Aorta Calculator\"]\n    HOME -->|Settings ⚙| SETTINGS[\"Settings\"]\n    HOME -->|Search 🔍| SEARCH[\"Search\"]\n    HOME -->|Recent Cases| RECENT[\"Recent Case Detail\"]\n\n    ACSD -->|Planned Surgery Tab| SURGERY[\"Surgery Type + Incidence\"]\n    ACSD -->|Demographics Tab| DEMO[\"Sex, Age, Height, Weight, Race\"]\n    ACSD -->|Laboratory Tab| LAB[\"Lab Values\"]\n    ACSD -->|Calculate| RESULTS[\"Risk Results\"]\n\n    SETTINGS -->|Face ID| FACE_ID[\"Toggle\"]\n    SETTINGS -->|Terms & Conditions| TC[\"Webview\"]\n    SETTINGS -->|Privacy Policy| PP[\"Webview\"]\n    SETTINGS -->|Log Out| START\n\n    style HOME fill:#34D399,stroke:#333,color:#000\n    style SETTINGS fill:#34D399,stroke:#333,color:#000\n    style TOS fill:#34D399,stroke:#333,color:#000"
+}
