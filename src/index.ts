@@ -12,6 +12,7 @@ import { parseMaestroYaml } from './parsers/maestro-yaml.js';
 import yaml from 'js-yaml';
 import matter from 'gray-matter';
 import type { Bug, Priority } from './types.js';
+import { generateFlows } from './generators/maestro-flows.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 
@@ -419,6 +420,151 @@ program
     const automatedCount = allTests.filter(t => t.maestroFlow).length;
     console.log(`\n  Coverage: ${automatedCount}/${happyPathTests.length} Happy Path/Flow tests have automation`);
     console.log(`  Run 'morbius serve' to see updated dashboard.\n`);
+  });
+
+program
+  .command('ingest-media')
+  .description('Copy latest Maestro run videos/screenshots into the project media folder')
+  .option('--timestamp <ts>', 'Use a specific run timestamp (default: latest)')
+  .action(async (opts) => {
+    const registry = loadProjectRegistry();
+    const activeProject = registry.projects.find(p => p.id === registry.activeProject);
+    if (!activeProject) {
+      console.error('No active project found.');
+      process.exit(1);
+    }
+    const mediaPath = (activeProject as any).mediaPath as string | undefined;
+    if (!mediaPath) {
+      console.error(`Project "${activeProject.name}" has no mediaPath configured.`);
+      console.error('Add "mediaPath" to data/projects.json for this project.');
+      process.exit(1);
+    }
+
+    const maestroTestsDir = path.join(process.env.HOME || '', '.maestro', 'tests');
+    if (!fs.existsSync(maestroTestsDir)) {
+      console.error(`Maestro tests directory not found: ${maestroTestsDir}`);
+      process.exit(1);
+    }
+
+    let timestamp = opts.timestamp as string | undefined;
+    if (!timestamp) {
+      const entries = fs.readdirSync(maestroTestsDir, { withFileTypes: true })
+        .filter(e => e.isDirectory())
+        .map(e => e.name)
+        .sort()
+        .reverse();
+      if (entries.length === 0) {
+        console.error('No Maestro test runs found.');
+        process.exit(1);
+      }
+      timestamp = entries[0];
+    }
+
+    const srcDir = path.join(maestroTestsDir, timestamp);
+    if (!fs.existsSync(srcDir)) {
+      console.error(`Run directory not found: ${srcDir}`);
+      process.exit(1);
+    }
+
+    const destRunDir = path.join(mediaPath, 'runs', timestamp);
+    const destVideosDir = path.join(destRunDir, 'videos');
+    const destScreenshotsDir = path.join(destRunDir, 'screenshots');
+    fs.mkdirSync(destVideosDir, { recursive: true });
+    fs.mkdirSync(destScreenshotsDir, { recursive: true });
+
+    let videosCopied = 0;
+    let screenshotsCopied = 0;
+
+    function copyFilesFrom(dir: string, destVideoDir: string, destScreenDir: string) {
+      if (!fs.existsSync(dir)) return;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const src = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          copyFilesFrom(src, destVideoDir, destScreenDir);
+        } else if (entry.name.endsWith('.mp4')) {
+          fs.copyFileSync(src, path.join(destVideoDir, entry.name));
+          videosCopied++;
+        } else if (entry.name.endsWith('.png') || entry.name.endsWith('.jpg') || entry.name.endsWith('.jpeg')) {
+          fs.copyFileSync(src, path.join(destScreenDir, entry.name));
+          screenshotsCopied++;
+        }
+      }
+    }
+
+    copyFilesFrom(srcDir, destVideosDir, destScreenshotsDir);
+
+    console.log(`\nIngest complete — run: ${timestamp}`);
+    console.log(`  Videos:      ${videosCopied}`);
+    console.log(`  Screenshots: ${screenshotsCopied}`);
+    console.log(`  Destination: ${destRunDir}\n`);
+  });
+
+program
+  .command('generate-flows')
+  .description('Generate complete Maestro YAML flows from calculatorConfig.json')
+  .option('--config <path>', 'Path to calculatorConfig.json')
+  .option('--output <path>', 'Output directory for generated flows')
+  .option('--calculator <id>', 'Generate for one calculator only (e.g. "oprisk")')
+  .option('--platform <os>', 'ios or android', 'ios')
+  .option('--app-id <id>', 'App bundle ID', 'com.sts.calculator.dev')
+  .option('--login-flow <path>', 'Relative path to shared login.yaml', '../../shared/login.yaml')
+  .option('--dry-run', 'Preview without writing files')
+  .action((opts) => {
+    const registry = loadProjectRegistry();
+    const activeProject = registry.projects.find(p => p.id === registry.activeProject);
+
+    // Resolve config path
+    let configPath = opts.config;
+    if (!configPath) {
+      const codebasePath = (activeProject as any)?.codebasePath;
+      if (codebasePath) {
+        configPath = path.join(codebasePath, 'scripts', 'calculatorConfig.json');
+      } else {
+        console.error('No --config provided and no codebasePath in active project.');
+        process.exit(1);
+      }
+    }
+    if (!fs.existsSync(configPath)) {
+      console.error(`Config not found: ${configPath}`);
+      process.exit(1);
+    }
+
+    // Resolve output directory
+    let outputDir = opts.output;
+    if (!outputDir) {
+      const maestroPaths = (activeProject as any)?.maestro;
+      if (maestroPaths?.ios) {
+        outputDir = path.join(path.dirname(maestroPaths.ios), 'generated');
+      } else {
+        outputDir = path.join(process.cwd(), 'generated-flows');
+      }
+    }
+
+    console.log(`\n  Generating Maestro flows...`);
+    console.log(`  Config:     ${configPath}`);
+    console.log(`  Output:     ${outputDir}`);
+    console.log(`  Platform:   ${opts.platform}`);
+    if (opts.calculator) console.log(`  Calculator: ${opts.calculator}`);
+    if (opts.dryRun) console.log(`  Mode:       DRY RUN`);
+    console.log('');
+
+    const result = generateFlows({
+      configPath,
+      outputDir,
+      platform: opts.platform,
+      appId: opts.appId,
+      loginFlowPath: opts.loginFlow,
+      calculatorId: opts.calculator,
+      dryRun: opts.dryRun,
+    });
+
+    for (const entry of result.summary) {
+      console.log(`  ✓ ${entry.calculator}`);
+      console.log(`    ${entry.sections} section flows + 1 master | ${entry.fields} fields covered`);
+    }
+
+    console.log(`\n  Total: ${result.flows.length} flow files${opts.dryRun ? ' (dry run — nothing written)' : ' generated'}\n`);
   });
 
 program.parse();

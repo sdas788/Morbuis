@@ -1,5 +1,5 @@
 {
-  "activeProject": "micro-air",
+  "activeProject": "sts",
   "projects": [
     {
       "id": "micro-air",
@@ -103,11 +103,13 @@
       "name": "STS Risk Calculator",
       "created": "2026-03-26",
       "appId": "com.sts.calculator",
+      "codebasePath": "/Users/sdas/Downloads/sts-mobile-main",
+      "mediaPath": "/Users/sdas/STS/sts-testing/media",
       "excel": {
         "source": "/Users/sdas/Downloads/STS – Standard Feature QA Test Cases.xlsx"
       },
       "maestro": {
-        "androidPath": "/Users/sdas/STS/sts-testing/Andriod test",
+        "androidPath": "/Users/sdas/Morbius/data/sts/flows",
         "iosPath": "/Users/sdas/STS/sts-testing/IOS app"
       },
       "env": {

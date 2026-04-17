@@ -1,0 +1,65 @@
+appId: com.sts.calculator.dev
+name: "00 Login — Restore Auth Session (Android)"
+tags:
+  - android
+  - login
+  - setup
+---
+# Login flow for dev build — restores auth after pm clear
+# Credentials: cthomas / Test1234!
+# NOTE: Android gRPC driver incompatible with API 36 — launchApp not used.
+# Pre-condition: App is on "Log in to your account" splash screen.
+
+- extendedWaitUntil:
+    visible: "Log in to your account"
+    timeout: 15000
+
+- tapOn: "Log in to your account"
+- waitForAnimationToEnd:
+    timeout: 10000
+
+# Terms of Service screen — scroll to bottom and accept (may or may not appear)
+- runFlow:
+    when:
+      visible: "Terms of Service"
+    commands:
+      - scroll
+      - scroll
+      - scroll
+      - scroll
+      - scroll
+      - scroll
+      - scroll
+      - scroll
+      - scroll
+      - scroll
+      - tapOn: "I Agree"
+      - waitForAnimationToEnd:
+          timeout: 10000
+
+# Webview Login Form — wait for username field
+- extendedWaitUntil:
+    visible:
+      id: "FormContentPlaceHolder_LoginEditForm_UserName"
+    timeout: 30000
+
+- tapOn:
+    id: "FormContentPlaceHolder_LoginEditForm_UserName"
+- inputText: "cthomas"
+
+- tapOn:
+    id: "FormContentPlaceHolder_LoginEditForm_Password"
+- inputText: "Test1234!"
+- hideKeyboard
+
+- scroll
+
+- tapOn:
+    id: "FormContentPlaceHolder_LoginEditForm_LoginButtonStrip_LoginButton"
+
+# OAuth redirect takes 30-60 seconds
+- extendedWaitUntil:
+    visible: "Calculators"
+    timeout: 90000
+
+- assertVisible: "ACSD Operative Risk Calculator"

@@ -1,0 +1,41 @@
+appId: com.sts.calculator.dev
+name: "Find albumin in Lab Values"
+---
+# Navigate to Lab Values section by scrolling
+# Scroll down 5x to get past Previous Interventions and Demographics to Lab Values
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 300
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 300
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 300
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 300
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 300
+# Now try to scrollUntilVisible albumin
+- scrollUntilVisible:
+    element:
+      id: input-albumin
+    direction: DOWN
+    timeout: 15000

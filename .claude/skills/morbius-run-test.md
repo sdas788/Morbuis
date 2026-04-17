@@ -1,16 +1,15 @@
 ---
 name: morbius-run-test
-description: Run a Maestro test flow on a device. Handles app launch (adb, not Maestro launchApp), env loading, result tracking, and bug creation on failure.
+description: Run a Maestro test flow on a device via Maestro MCP. Handles app launch, env loading, result tracking, and bug creation on failure. Always use mcp__maestro__run_flow_files with the correct path format.
 user_invocable: true
 ---
 
 # Run Maestro Test
 
-Execute a Maestro YAML test flow against a live device/emulator.
+Execute a Maestro YAML test flow against a live device/emulator using the Maestro MCP tool.
 
-## Before Running
-1. Run the `morbius-preflight` skill — all checks must pass
-2. If pre-flight fails, fix issues before proceeding
+## RULE: Always use Maestro MCP, not CLI
+Use `mcp__maestro__run_flow_files` to run flows — it gives live feedback and integrates with the Morbius board. Only fall back to CLI if MCP is unavailable.
 
 ---
 
@@ -21,117 +20,98 @@ Ask the user or determine from context:
 - **Test case ID** — e.g., "run TC-2.01" → look up linked flow in markdown frontmatter
 - **Feature area** — e.g., "test login" → find the matching flow in `flows/`
 
-Find the flow file:
-```bash
-# By flow name
-ls /Users/sdas/Micro-Air/micro-air-testing/Andriod\ test/flows/
+### Flow file locations
 
-# By test case ID (check markdown frontmatter)
-grep -r "maestro_flow_android" /Users/sdas/Morbius/data/micro-air/tests/ | grep "TC-2.01"
+| Project | Platform | Path |
+|---------|----------|------|
+| Micro-Air | Android | `/Users/sdas/Micro-Air/micro-air-testing/Andriod test/flows/` |
+| Micro-Air | iOS | `/Users/sdas/Micro-Air/micro-air-testing/IOS app/flows/` |
+| STS | Android | `/Users/sdas/STS/sts-testing/Andriod test/flows/` |
+| STS | iOS | `/Users/sdas/STS/sts-testing/IOS app/flows/` |
+
+---
+
+## Step 2: Get the Device ID
+
+```
+mcp__maestro__list_devices
 ```
 
-## Step 2: Prepare the App
+| Device | ID |
+|--------|-----|
+| Android emulator | `emulator-5554` |
+| iOS simulator | varies — check list_devices output |
 
-⚠️ **CRITICAL: Maestro `launchApp` does NOT work with React Native apps.** Always use adb to launch.
+---
 
-```bash
-# Stop the app
-adb shell am force-stop <APP_ID>
+## Step 3: Execute via Maestro MCP
 
-# Option A: Clean launch (clears login state — for login/create account flows)
-adb shell pm clear <APP_ID>
-adb shell am start -n <APP_ID>/.MainActivity
-
-# Option B: Hot launch (keeps login state — for flows that need authenticated state)
-adb shell am start -n <APP_ID>/.MainActivity
-```
-
-**When to use which:**
-- `01_login.yaml`, `02_create_account.yaml` → **Clean launch** (need Welcome screen)
-- `03-07_*.yaml` → **Hot launch** works if the shared `login.yaml` helper handles login from Welcome screen. If app resumes to Hub Home, the login helper will still work because it checks for "Welcome!|Sign In" first.
-
-### App IDs
-| Project | App ID |
-|---------|--------|
-| Micro-Air | `com.microair.connectrv` |
-| STS | Check `data/sts/config.json` |
-
-## Step 3: Load Environment Variables
-
-Read from the project config:
-```bash
-cat /Users/sdas/Morbius/data/micro-air/config.json
-```
-
-Core env vars for Micro-Air:
-```
-TEST_EMAIL=f5qcb@dollicons.com
-TEST_PASSWORD=Qwer1234!
-TEST_FIRST_NAME=QA
-TEST_LAST_NAME=User
-TEST_EMAIL2=sdas+1@redfoundry.com
-TEST_PHONE=5551234567
-```
-
-## Step 4: Execute
-
-### Option A: Run via Maestro MCP (preferred — live feedback)
+### Run a single flow
 ```
 mcp__maestro__run_flow_files
   device_id: emulator-5554
-  flow_files: /Users/sdas/Micro-Air/micro-air-testing/Andriod test/flows/01_login.yaml
-  env: { "TEST_EMAIL": "f5qcb@dollicons.com", "TEST_PASSWORD": "Qwer1234!" }
+  flow_files: ../STS/sts-testing/Andriod test/flows/01_login.yaml
 ```
 
-⚠️ `run_flow_files` prepends the CWD to relative paths. Always use **absolute paths**.
+**Path note:** Maestro MCP prepends `/Users/sdas/Morbius` (the CWD) to all paths.
+- Use **relative paths** starting with `../` to reach outside Morbius
+- Example: `../STS/sts-testing/Andriod test/flows/01_login.yaml`
+- Example: `../Micro-Air/micro-air-testing/Andriod test/flows/01_login.yaml`
 
-### Option B: Run via Maestro CLI (for full output/logs)
-```bash
-cd "/Users/sdas/Micro-Air/micro-air-testing/Andriod test/flows"
-maestro test \
-  -e TEST_EMAIL=f5qcb@dollicons.com \
-  -e TEST_PASSWORD="Qwer1234!" \
-  01_login.yaml
+### Run with environment variables
 ```
-
-### Option C: Run ad-hoc commands (for debugging)
-```
-mcp__maestro__run_flow
+mcp__maestro__run_flow_files
   device_id: emulator-5554
-  flow_yaml: |
-    appId: com.microair.connectrv
-    ---
-    - tapOn: "Sign In"
-    - waitForAnimationToEnd: { timeout: 5000 }
+  flow_files: ../STS/sts-testing/Andriod test/flows/01_login.yaml
+  env: { "TEST_USERNAME": "cthomas", "TEST_PASSWORD": "Test1234!" }
 ```
+
+### Run multiple flows in sequence
+```
+mcp__maestro__run_flow_files
+  device_id: emulator-5554
+  flow_files: ../STS/sts-testing/Andriod test/flows/01_login.yaml,../STS/sts-testing/Andriod test/flows/02_calculators_home.yaml
+```
+
+---
+
+## Step 4: App Launch (React Native Critical Note)
+
+The YAML files handle app launch internally. Both Micro-Air and STS are React Native — their flows use:
+```yaml
+- stopApp
+- clearState
+- launchApp
+```
+**Do NOT** manually pre-launch the app with adb before running the flow — the YAML handles it.
+
+If you ever need to manually clear app state before testing:
+```bash
+export PATH="$PATH:$HOME/Library/Android/sdk/platform-tools"
+adb shell am force-stop <APP_ID>
+adb shell pm clear <APP_ID>
+```
+
+---
 
 ## Step 5: Handle Results
 
 ### If PASSED
-1. Take a screenshot to confirm: `mcp__maestro__take_screenshot`
+1. Take a screenshot: `mcp__maestro__take_screenshot`
 2. Update test status on the Morbius board:
 ```bash
 curl -X POST http://localhost:3000/api/test/update \
   -H "Content-Type: application/json" \
   -d '{"id":"TC-2.01","status":"pass"}'
 ```
-3. Report success to the user
+3. Report success, move to next flow
 
 ### If FAILED
-1. Take a screenshot to capture the failure state
-2. Check what went wrong:
-   - `mcp__maestro__take_screenshot` — what screen are we on?
-   - `mcp__maestro__inspect_view_hierarchy` — what elements exist?
-3. Common failures and fixes:
-
-| Error | Cause | Fix |
-|-------|-------|-----|
-| "Unable to launch app" | React Native + Maestro launchApp bug | Use `adb shell am start` instead |
-| "Element not found: text" | Text changed, element not on screen | Inspect hierarchy, use ID or regex |
-| "Assertion is false: X is visible" | Screen hasn't loaded yet | Increase `extendedWaitUntil` timeout |
-| "Registration failed" | Duplicate email in create account | Use a fresh email or expected error |
-
-4. If it's a real app bug (not a test issue), create a bug ticket:
+1. Take a screenshot: `mcp__maestro__take_screenshot`
+2. Inspect screen: `mcp__maestro__inspect_view_hierarchy`
+3. Debug the failing step (see Step 6)
+4. Fix the YAML, re-run the full flow
+5. If it's a real app bug (not test issue), create a bug ticket:
 ```bash
 cd /Users/sdas/Morbius
 node dist/index.js create-bug \
@@ -141,48 +121,69 @@ node dist/index.js create-bug \
   --priority P2 \
   --reason "Sign In button tap has no effect after entering valid credentials"
 ```
-
-5. Update test status to fail:
+6. Update test status to fail:
 ```bash
 curl -X POST http://localhost:3000/api/test/update \
   -H "Content-Type: application/json" \
   -d '{"id":"TC-2.01","status":"fail"}'
 ```
 
-## Step 6: Debug Failing Flows
+---
 
-When a flow fails mid-way, don't restart from scratch. Debug interactively:
+## Step 6: Debug Failing Flows
 
 1. **See where you are:** `mcp__maestro__take_screenshot`
 2. **See what's available:** `mcp__maestro__inspect_view_hierarchy`
-3. **Try the failing command manually:** `mcp__maestro__run_flow` with just that one step
-4. **Adjust the selector** and re-run the single step
-5. Once fixed, update the YAML file and re-run the full flow
+3. **Test the failing step manually:**
+```
+mcp__maestro__run_flow
+  device_id: emulator-5554
+  flow_yaml: |
+    appId: com.sts.calculator
+    ---
+    - tapOn: "Log in to your account"
+    - waitForAnimationToEnd:
+        timeout: 5000
+```
+4. **Fix the selector** in the YAML file
+5. **Re-run the full flow** with `mcp__maestro__run_flow_files`
+
+### Common failures
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| "Unable to launch app" | `launchApp: clearState: true` crashes RN | Use `stopApp` + `clearState` + `launchApp` in YAML |
+| Path not found | MCP prepends CWD | Use `../` relative path |
+| "Element not found: text" | Text changed or off-screen | Inspect hierarchy, use ID or regex |
+| "Assertion false: X visible" | Screen hasn't loaded | Increase `extendedWaitUntil timeout` |
+| Password in wrong field | `tapOn: "Password"` matches label only | Use `tapOn: id: "...Password"` resource-id |
+| OAuth redirect timeout | Server slow (30-60s) | Use `extendedWaitUntil timeout: 90000` |
+| MCP connection timeout | Long-running flow (>2min) | Normal for OAuth flows — the result still comes back |
 
 ---
 
-## Quick Reference: Device IDs
+## Environment Variables
 
+### Micro-Air
+```
+TEST_EMAIL=f5qcb@dollicons.com
+TEST_PASSWORD=Qwer1234!
+APP_ID=com.microair.connectrv
+```
+
+### STS
+```
+TEST_USERNAME=cthomas
+TEST_PASSWORD=Test1234!
+APP_ID=com.sts.calculator
+```
+
+---
+
+## Option B: Run via Maestro CLI (fallback)
+
+Only use if MCP is unavailable:
 ```bash
-# List connected devices
-adb devices
-
-# Common emulator ID
-emulator-5554
-
-# Get device ID via Maestro MCP
-mcp__maestro__list_devices
-```
-
-## Quick Reference: Flow Files (Micro-Air)
-
-```
-flows/01_login.yaml          → Login happy path
-flows/02_create_account.yaml → Create account to MFA screen
-flows/03_hub_dashboard.yaml  → Hub dashboard verification
-flows/04_hub_actions.yaml    → Hub menu actions (rename, settings)
-flows/05_sensor_actions.yaml → Sensor detail and menu
-flows/06_notifications.yaml  → Alerts and alert settings
-flows/07_account.yaml        → Profile, edit, settings
-shared/login.yaml            → Reusable login helper
+cd "/Users/sdas/STS/sts-testing/Andriod test/flows"
+maestro test 01_login.yaml
 ```

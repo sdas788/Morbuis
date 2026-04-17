@@ -1,0 +1,274 @@
+appId: com.sts.calculator.dev
+name: "09 Mitral Regurgitation — Full E2E Calculation (Android)"
+tags:
+  - android
+  - mitral
+  - calculator
+  - happy-path
+  - flow
+---
+# -----------------------------------------------
+# Mitral Regurgitation Risk Calculator
+# Sections: Demographics → Risk Factors → Lab Results → Cardiac Details
+# Patient Summary sticky card: tapOn id: btn-patient-summary
+# Back navigation: - back (Android hardware back)
+# NOTE: Android gRPC driver incompatible with API 36 — launchApp not used.
+# Pre-condition: adb -s emulator-5554 shell am force-stop com.sts.calculator.dev
+#                adb -s emulator-5554 shell am start -n com.sts.calculator.dev/com.sts.calculator.MainActivity
+# ARCH: Mitral uses SINGLE-LONG-SCROLL architecture. All 4 section tabs
+#       (Demographics, Risk Factors, Lab Results, Cardiac Details) are always
+#       visible in the accessibility tree — NO 4× swipe needed.
+#       Section tabs are scroll-anchors, not separate content panes.
+# NOTE: tab-demographics → single tap; use direction: UP for input-age
+#       (Demographics is the first/topmost section in the scroll).
+# NOTE: Risk Factors has 2 subsection tabs: tab-preopMeds, tab-otherRiskFactors.
+#       tab-otherRiskFactors contains checkbox-hypertension etc.
+# NOTE: Lab Results tab ID is tab-laboratoryValues (NOT tab-labResults).
+#       Lab Results fields: hematocrit, wbc, platelets, creatinine, ejectionFraction.
+# NOTE: Cardiac Details chronic heart failure: radio-chronicHeartFailure-No Failure-#,#
+# NOTE: AF overshoot: scroll to radio-atrialFibrillation-3 so -1 (None) lifts above toast.
+# NOTE: Aortic regurgitation + MV pathology use text-based taps (unique Mitral fields).
+# -----------------------------------------------
+
+- extendedWaitUntil:
+    visible:
+      text: "Mitral Regurgitation Risk Calculator"
+    timeout: 20000
+
+- tapOn: "Mitral Regurgitation Risk Calculator"
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# ===== SECTION 1: Demographics =====
+# ARCH: Single tap on tab-demographics scrolls to the Demographics anchor.
+# Demographics is the first section — scroll UP to find input-age at the top.
+- tapOn:
+    id: tab-demographics
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: input-age
+    direction: UP
+    timeout: 10000
+- tapOn:
+    id: input-age
+- inputText: "65"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-height
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-height
+- inputText: "170"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-weight
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-weight
+- inputText: "75"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: radio-sex-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-sex-1
+
+- scrollUntilVisible:
+    element:
+      id: chip-race-White
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-race-White
+
+# ===== SECTION 2: Risk Factors =====
+- tapOn:
+    id: tab-riskFactors
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Tobacco Use: Never Smoker=1
+- scrollUntilVisible:
+    element:
+      id: radio-tobaccoUse-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-tobaccoUse-1
+
+# Diabetes: No (singleSelectMultiAttribute)
+- scrollUntilVisible:
+    element:
+      id: "radio-diabetes-No-#,2"
+    direction: DOWN
+    timeout: 10000
+    speed: 20
+    visibilityPercentage: 50
+- tapOn:
+    id: "radio-diabetes-No-#,2"
+
+# Chronic Lung Disease: No=1
+- scrollUntilVisible:
+    element:
+      id: radio-chronicLungDisease-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-chronicLungDisease-1
+
+# ── Other Risk Factors subsection ──
+# tab-otherRiskFactors is a fixed subsection tab within Risk Factors.
+- tapOn:
+    id: tab-otherRiskFactors
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: checkbox-hypertension
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: checkbox-hypertension
+
+# ===== SECTION 3: Lab Results =====
+# NOTE: tab-laboratoryValues is the correct ID (not tab-labResults).
+- tapOn:
+    id: tab-laboratoryValues
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: input-hematocrit
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-hematocrit
+- inputText: "42"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-wbc
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-wbc
+- inputText: "7.5"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-platelets
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-platelets
+- inputText: "250000"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-creatinine
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-creatinine
+- inputText: "1.1"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-ejectionFraction
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-ejectionFraction
+- inputText: "55"
+- back
+
+# ===== SECTION 4: Cardiac Details =====
+- tapOn:
+    id: tab-cardiacDetails
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Chronic Heart Failure: No Failure
+- scrollUntilVisible:
+    element:
+      id: "radio-chronicHeartFailure-No Failure-#,#"
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: "radio-chronicHeartFailure-No Failure-#,#"
+
+# Surgical Priority: Elective=1
+- scrollUntilVisible:
+    element:
+      id: radio-surgicalPriority-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-surgicalPriority-1
+
+# Pre-Op AF: None=1
+# Overshoot: scroll to radio-atrialFibrillation-3 (Recent AF) so -1 (None) lifts above toast band.
+- scrollUntilVisible:
+    element:
+      id: radio-atrialFibrillation-3
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-atrialFibrillation-1
+
+# Aortic Valve Regurgitation: No/Mild insufficiency
+- scrollUntilVisible:
+    element: "No/Mild insufficiency"
+    direction: DOWN
+    timeout: 10000
+- tapOn: "No/Mild insufficiency"
+
+# MV Pathology: Leaflet Prolapse without Flail
+- scrollUntilVisible:
+    element: "Leaflet Prolapse without Flail"
+    direction: DOWN
+    timeout: 10000
+- tapOn: "Leaflet Prolapse without Flail"
+
+# ===== VERIFY: Patient Summary =====
+- tapOn:
+    id: btn-patient-summary
+- waitForAnimationToEnd:
+    timeout: 5000
+
+- assertVisible: "Perioperative Outcome"
+- assertVisible: "Estimate"
+- assertVisible: "Isolated MV repair (MVr)"
+- assertVisible: "Morbidity & Mortality"
+
+- scrollUntilVisible:
+    element: "Clinical Summary"
+    direction: DOWN
+    timeout: 5000
+- assertVisible: "Clinical Summary"
+
+- tapOn:
+    id: phosphor-react-native-x-bold
+- waitForAnimationToEnd:
+    timeout: 2000
+- back
+- waitForAnimationToEnd:
+    timeout: 2000

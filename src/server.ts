@@ -5,10 +5,14 @@ import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { WebSocketServer, WebSocket } from 'ws';
 import { loadAllTestCases, loadAllBugs, loadAllCategories, loadAllRuns, loadProjectRegistry, saveProjectRegistry, loadProjectConfig, saveProjectConfig, getDataDir, updateTestCaseById, updateBugById, writeBug } from './parsers/markdown.js';
 import { parseMaestroYaml, stepsToHtml } from './parsers/maestro-yaml.js';
+import { parseCalculatorConfig, buildCoverageMatrix, findFiles } from './parsers/calculator-config.js';
 import { detectFlakyTests, calculateCategoryHealth, findCoverageGaps, buildActivityFeed } from './analyzer.js';
-import type { TestCase, Bug, Category, CategoryHealth, TestStatus, ProjectConfig, ProjectRegistry } from './types.js';
+import type { TestCase, Bug, Category, CategoryHealth, TestStatus, ProjectConfig, ProjectRegistry, MaestroRunRecord, LatestRunPointer, RepairRun, SuiteRun } from './types.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
+
+// Server port (set when startServer is called, used in sync-all self-call)
+let serverPort = 3000;
 
 // Active test runs (in-memory tracking)
 const activeRuns = new Map<string, {
@@ -19,6 +23,15 @@ const activeRuns = new Map<string, {
   endTime?: number;
   output: string;
 }>();
+
+// Active run stream subscribers: runId → Set of WebSocket connections
+const runStreamSubscribers = new Map<string, Set<WebSocket>>();
+
+// Repair runs
+const repairRuns = new Map<string, RepairRun>();
+
+// Suite runs
+const suiteRuns = new Map<string, SuiteRun>();
 
 function getActiveProjectDir(): string {
   const registry = loadProjectRegistry();
@@ -31,6 +44,7 @@ function getActiveProjectDir(): string {
 }
 
 export function startServer(port: number): void {
+  serverPort = port;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost:${port}`);
     const pathname = url.pathname;
@@ -44,6 +58,12 @@ export function startServer(port: number): void {
     // Screenshot serving
     if (pathname.startsWith('/screenshots/')) {
       serveScreenshot(pathname, res);
+      return;
+    }
+
+    // Media serving (videos + screenshots from project mediaPath — outside Morbius repo)
+    if (pathname.startsWith('/media/')) {
+      serveMedia(pathname, res);
       return;
     }
 
@@ -70,10 +90,10 @@ export function startServer(port: number): void {
         activeProcesses.delete(ws);
       }
 
-      // Spawn Claude Code with the morbius agent
+      // Spawn Claude Code CLI
       const child = spawn('claude', [
-        '--agent', 'morbius',
         '--print',
+        '--model', 'claude-sonnet-4-6',
         userMessage,
       ], {
         cwd: process.cwd(),
@@ -81,7 +101,19 @@ export function startServer(port: number): void {
         stdio: ['pipe', 'pipe', 'pipe'],
       });
 
+      // Don't wait for stdin — close it immediately so claude doesn't block
+      child.stdin.end();
+
       activeProcesses.set(ws, child);
+
+      // 120s timeout — kill if claude hangs
+      const wsTimeout = setTimeout(() => {
+        child.kill('SIGTERM');
+        activeProcesses.delete(ws);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'error', content: 'Request timed out after 120s' }));
+        }
+      }, 120_000);
 
       child.stdout.on('data', (chunk: Buffer) => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -90,12 +122,14 @@ export function startServer(port: number): void {
       });
 
       child.stderr.on('data', (chunk: Buffer) => {
+        // stderr = tool-use status lines — send as info, not error
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'chunk', content: chunk.toString() }));
+          ws.send(JSON.stringify({ type: 'info', content: chunk.toString() }));
         }
       });
 
       child.on('close', (code) => {
+        clearTimeout(wsTimeout);
         activeProcesses.delete(ws);
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'done', exitCode: code }));
@@ -103,6 +137,7 @@ export function startServer(port: number): void {
       });
 
       child.on('error', (err) => {
+        clearTimeout(wsTimeout);
         activeProcesses.delete(ws);
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'error', content: err.message }));
@@ -119,10 +154,111 @@ export function startServer(port: number): void {
     });
   });
 
+  // WebSocket server for live run log streaming
+  const runStreamWss = new WebSocketServer({ server, path: '/ws/run-stream' });
+  runStreamWss.on('connection', (ws) => {
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'subscribe' && msg.runId) {
+          if (!runStreamSubscribers.has(msg.runId)) {
+            runStreamSubscribers.set(msg.runId, new Set());
+          }
+          runStreamSubscribers.get(msg.runId)!.add(ws);
+          ws.send(JSON.stringify({ type: 'subscribed', runId: msg.runId }));
+        }
+      } catch { /* ignore malformed */ }
+    });
+    ws.on('close', () => {
+      // Remove from all subscriber sets
+      for (const [runId, subs] of runStreamSubscribers) {
+        subs.delete(ws);
+        if (subs.size === 0) runStreamSubscribers.delete(runId);
+      }
+    });
+  });
+
   server.listen(port, () => {
     console.log(`\n  Morbius Dashboard`);
     console.log(`  Local:   http://localhost:${port}\n`);
   });
+}
+
+// Broadcast a message to all WebSocket subscribers for a runId
+function broadcastRunEvent(runId: string, payload: object): void {
+  const subs = runStreamSubscribers.get(runId);
+  if (!subs) return;
+  const msg = JSON.stringify(payload);
+  for (const ws of subs) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+  }
+}
+
+// Parse failure info from Maestro stdout
+function parseFailureInfo(output: string): { failingStep: string | null; errorLine: string | null } {
+  const lines = output.split('\n');
+  let failingStep: string | null = null;
+  let errorLine: string | null = null;
+
+  for (const line of lines) {
+    // Maestro failure line patterns
+    if (line.includes('No visible element found') ||
+        line.includes('AssertionError') ||
+        line.includes('Element not found') ||
+        line.includes('Timeout waiting') ||
+        line.includes('FAILED')) {
+      if (!errorLine) errorLine = line.trim();
+    }
+    // Step identifier lines (contain 'tapOn', 'scrollUntilVisible', etc.)
+    if (line.match(/\s+(tapOn|scrollUntilVisible|assertVisible|inputText|swipe)\s*[:{]/)) {
+      failingStep = line.trim();
+    }
+  }
+  return { failingStep, errorLine };
+}
+
+// Capture screenshot from connected device/emulator
+async function captureScreenshot(platform: string, runId: string, testId: string, projectDir: string): Promise<string | null> {
+  try {
+    const screenshotDir = path.join(projectDir, 'screenshots', runId);
+    fs.mkdirSync(screenshotDir, { recursive: true });
+    const screenshotFile = path.join(screenshotDir, testId.replace(/[^a-zA-Z0-9-_]/g, '_') + '.png');
+    const relPath = path.join('screenshots', runId, testId.replace(/[^a-zA-Z0-9-_]/g, '_') + '.png');
+
+    if (platform === 'android') {
+      execSync(`adb shell screencap -p /sdcard/morbius_tmp.png && adb pull /sdcard/morbius_tmp.png "${screenshotFile}" && adb shell rm /sdcard/morbius_tmp.png`, { timeout: 10000 });
+    } else if (platform === 'ios') {
+      execSync(`xcrun simctl io booted screenshot "${screenshotFile}"`, { timeout: 10000 });
+    } else {
+      return null;
+    }
+
+    return fs.existsSync(screenshotFile) ? relPath : null;
+  } catch {
+    return null; // non-fatal
+  }
+}
+
+// Write run record to disk
+function writeRunRecord(record: MaestroRunRecord, projectDir: string): void {
+  try {
+    const runsDir = path.join(projectDir, 'runs');
+    fs.mkdirSync(runsDir, { recursive: true });
+    fs.writeFileSync(path.join(runsDir, record.runId + '.json'), JSON.stringify(record, null, 2));
+    // Write latest pointer
+    const latestPointer: LatestRunPointer = {
+      runId: record.runId,
+      screenshotPath: record.screenshotPath,
+      status: record.status,
+      failingStep: record.failingStep,
+      errorLine: record.errorLine,
+      timestamp: record.endTime,
+    };
+    fs.writeFileSync(
+      path.join(runsDir, record.testId.replace(/[^a-zA-Z0-9-_]/g, '_') + '-latest.json'),
+      JSON.stringify(latestPointer, null, 2)
+    );
+  } catch { /* non-fatal */ }
 }
 
 function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -141,9 +277,22 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
     if (pathname === '/api/health') {
       const checks: Record<string, { ok: boolean; detail: string }> = {};
 
+      // Extend PATH to find tools installed via homebrew, nvm, maestro, android sdk
+      const HOME = process.env.HOME ?? '';
+      const extendedPath = [
+        process.env.PATH,
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        `${HOME}/.maestro/bin`,
+        `${HOME}/Library/Android/sdk/platform-tools`,
+        // Find nvm node path dynamically
+        ...(() => { try { const fs = require('fs'); const nvmDir = `${HOME}/.nvm/versions/node`; return fs.existsSync(nvmDir) ? fs.readdirSync(nvmDir).map((v: string) => `${nvmDir}/${v}/bin`) : []; } catch { return []; } })(),
+      ].filter(Boolean).join(':');
+      const execEnv = { ...process.env, PATH: extendedPath };
+
       // Check Maestro CLI
       try {
-        const ver = execSync('maestro --version 2>/dev/null || echo "not found"', { timeout: 5000 }).toString().trim();
+        const ver = execSync('maestro --version 2>/dev/null || echo "not found"', { timeout: 5000, env: execEnv }).toString().trim();
         checks.maestro = { ok: !ver.includes('not found'), detail: ver.includes('not found') ? 'Not installed' : ver };
       } catch {
         checks.maestro = { ok: false, detail: 'Not installed' };
@@ -151,7 +300,7 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
 
       // Check Android emulator/device
       try {
-        const devices = execSync('adb devices 2>/dev/null | grep -v "List" | grep -v "^$" || echo ""', { timeout: 5000 }).toString().trim();
+        const devices = execSync('adb devices 2>/dev/null | grep -v "List" | grep -v "^$" || echo ""', { timeout: 5000, env: execEnv }).toString().trim();
         const hasDevice = devices.length > 0 && !devices.includes('not found');
         checks.android = { ok: hasDevice, detail: hasDevice ? devices.split('\n')[0].split('\t')[0] : 'No device' };
       } catch {
@@ -160,7 +309,7 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
 
       // Check iOS simulator
       try {
-        const sims = execSync('xcrun simctl list devices booted 2>/dev/null | grep "Booted" || echo ""', { timeout: 5000 }).toString().trim();
+        const sims = execSync('xcrun simctl list devices booted 2>/dev/null | grep "Booted" || echo ""', { timeout: 5000, env: execEnv }).toString().trim();
         const hasSim = sims.length > 0;
         const simName = hasSim ? sims.match(/\s+(.+?)\s+\(/)?.[1] ?? 'Booted' : 'None running';
         checks.ios = { ok: hasSim, detail: simName };
@@ -365,30 +514,56 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
           // Update test to in-progress
           updateTestCaseById(testId, { status: 'in-progress' }, dir, 'maestro-run');
 
+          // Create log file
+          const runsDir = path.join(dir, 'runs');
+          fs.mkdirSync(runsDir, { recursive: true });
+          const logStream = fs.createWriteStream(path.join(runsDir, runId + '.log'), { flags: 'a' });
+          const startTime = new Date().toISOString();
+
           // Spawn maestro test
           const child = spawn('maestro', ['test', flowPath], { env, cwd: process.cwd() });
 
           let output = '';
           child.stdout.on('data', (data: Buffer) => {
-            output += data.toString();
+            const chunk = data.toString();
+            output += chunk;
+            logStream.write(chunk);
             const run = activeRuns.get(runId);
             if (run) run.output = output;
+            broadcastRunEvent(runId, { type: 'log', runId, data: chunk });
           });
           child.stderr.on('data', (data: Buffer) => {
-            output += data.toString();
+            const chunk = data.toString();
+            output += chunk;
+            logStream.write(chunk);
             const run = activeRuns.get(runId);
             if (run) run.output = output;
+            broadcastRunEvent(runId, { type: 'log', runId, data: chunk });
           });
 
-          child.on('close', (code) => {
+          child.on('close', async (code) => {
+            logStream.end();
+            const status = code === 0 ? 'pass' : 'fail';
             const run = activeRuns.get(runId);
             if (run) {
-              run.status = code === 0 ? 'passed' : 'failed';
+              run.status = status === 'pass' ? 'passed' : 'failed';
               run.endTime = Date.now();
               run.output = output;
             }
-            // Update test status
-            updateTestCaseById(testId, { status: code === 0 ? 'pass' : 'fail' }, dir, 'maestro-run');
+            updateTestCaseById(testId, { status }, dir, 'maestro-run');
+
+            const { failingStep, errorLine } = parseFailureInfo(output);
+            const screenshotPath = status === 'fail' ? await captureScreenshot(platform, runId, testId, dir) : null;
+
+            const record: MaestroRunRecord = {
+              runId, testId, platform: platform as any,
+              status: status as any,
+              startTime, endTime: new Date().toISOString(),
+              durationMs: run ? run.endTime! - run.startTime : 0,
+              exitCode: code ?? 1, failingStep, errorLine, screenshotPath,
+            };
+            writeRunRecord(record, dir);
+            broadcastRunEvent(runId, { type: 'done', runId, status, failingStep, errorLine, screenshotPath });
 
             // Auto-cleanup after 5 minutes
             setTimeout(() => activeRuns.delete(runId), 5 * 60 * 1000);
@@ -465,6 +640,260 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
         appMap,
         projectName: projectId,
         projectDisplayName,
+      });
+      return;
+
+    } else if (pathname === '/api/runs/media' && req.method === 'GET') {
+      // List all ingested media runs for the active project
+      const registry = loadProjectRegistry();
+      const project = registry.projects.find(p => p.id === registry.activeProject);
+      const mediaPath = (project as any)?.mediaPath as string | undefined;
+      if (!mediaPath) {
+        json(res, { error: 'No mediaPath configured', runs: [] });
+        return;
+      }
+      json(res, { mediaPath, runs: listMediaRuns(mediaPath) });
+      return;
+
+    } else if (pathname === '/api/runs/ingest-latest' && req.method === 'POST') {
+      // Copy the most recent ~/.maestro/tests/<timestamp>/ into the project's mediaPath
+      const registry = loadProjectRegistry();
+      const project = registry.projects.find(p => p.id === registry.activeProject);
+      const mediaPath = (project as any)?.mediaPath as string | undefined;
+      if (!mediaPath) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: 'No mediaPath configured for this project' }));
+        return;
+      }
+      try {
+        const run = ingestLatestMaestroRun(mediaPath);
+        if (!run) {
+          json(res, { ok: false, message: 'No Maestro test runs found in ~/.maestro/tests/' });
+        } else {
+          json(res, { ok: true, run });
+        }
+      } catch (err) {
+        res.writeHead(500);
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+      return;
+
+    } else if (pathname === '/api/coverage') {
+      // Calculator coverage matrix — cross-reference calculatorConfig.json vs Maestro YAMLs + test files
+      const registry = loadProjectRegistry();
+      const project = registry.projects.find(p => p.id === registry.activeProject);
+      const codebasePath = (project as any)?.codebasePath;
+
+      if (!codebasePath) {
+        json(res, { error: 'No codebasePath set for this project', calculators: [] });
+        return;
+      }
+
+      const configPath = path.join(codebasePath, 'scripts', 'calculatorConfig.json');
+      if (!fs.existsSync(configPath)) {
+        json(res, { error: `calculatorConfig.json not found at ${configPath}`, calculators: [] });
+        return;
+      }
+
+      const calculators = parseCalculatorConfig(configPath);
+      const dir = getActiveProjectDir();
+
+      // Gather all YAML flows (android + ios)
+      const androidPath = project?.maestro?.androidPath;
+      const iosPath = project?.maestro?.iosPath;
+      const yamlPaths: string[] = [];
+      if (androidPath) yamlPaths.push(...findFiles(androidPath, '.yaml'), ...findFiles(androidPath, '.yml'));
+      if (iosPath) yamlPaths.push(...findFiles(iosPath, '.yaml'), ...findFiles(iosPath, '.yml'));
+
+      // Gather all test case markdown files
+      const testFiles = findFiles(path.join(dir, 'tests'), '.md');
+
+      const coverage = buildCoverageMatrix(calculators, yamlPaths, testFiles);
+      const totalFields = coverage.reduce((s, c) => s + c.totalFields, 0);
+      const coveredTotal = coverage.reduce((s, c) => s + c.coveredFields.length, 0);
+
+      json(res, {
+        codebasePath,
+        configPath,
+        calculators: coverage,
+        summary: {
+          totalCalculators: coverage.length,
+          totalFields,
+          coveredFields: coveredTotal,
+          overallPct: totalFields === 0 ? 0 : Math.round((coveredTotal / totalFields) * 100),
+        },
+      });
+      return;
+
+    } else if (pathname === '/api/test/run-mcp' && req.method === 'POST') {
+      // Run a Maestro flow via Claude CLI → MCP (more reliable than direct maestro subprocess)
+      readBody(req, (body) => {
+        try {
+          const { testId, platform, deviceId } = JSON.parse(body);
+          if (!testId || !platform) { res.writeHead(400); res.end('{"error":"testId and platform required"}'); return; }
+
+          const tests = loadAllTestCases(dir);
+          const test = tests.find(t => t.id === testId);
+          if (!test) { res.writeHead(404); res.end('{"error":"Test not found"}'); return; }
+
+          let flowPath = '';
+          if (platform === 'android') flowPath = (test as any).maestroFlowAndroid || test.maestroFlow || '';
+          else if (platform === 'ios') flowPath = (test as any).maestroFlowIos || test.maestroFlow || '';
+          else flowPath = test.maestroFlow || '';
+
+          if (!flowPath || !fs.existsSync(flowPath)) {
+            res.writeHead(400);
+            res.end(JSON.stringify({ error: 'No Maestro flow found for ' + platform + (flowPath ? ' (missing: ' + flowPath + ')' : '') }));
+            return;
+          }
+
+          const runId = 'run-mcp-' + Date.now();
+          updateTestCaseById(testId, { status: 'in-progress' }, dir, 'maestro-run');
+          activeRuns.set(runId, { testId, platform, status: 'running', startTime: Date.now(), output: '' });
+
+          const deviceArg = deviceId ? ` on device ${deviceId}` : '';
+          const message = `Run the Maestro flow at path "${flowPath}"${deviceArg}. Use mcp__maestro__run_flow_files with the exact path. After it completes, reply with ONLY a JSON object on the last line: {"status":"pass"} or {"status":"fail","error":"reason"}`;
+
+          const child = spawn('claude', ['--print', '--model', 'claude-sonnet-4-6', message], {
+            cwd: process.cwd(),
+            env: { ...process.env, FORCE_COLOR: '0' },
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          child.stdin.end();
+
+          const runsDir = path.join(dir, 'runs');
+          fs.mkdirSync(runsDir, { recursive: true });
+          const logStream = fs.createWriteStream(path.join(runsDir, runId + '.log'), { flags: 'a' });
+          const startTime = new Date().toISOString();
+
+          let output = '';
+          child.stdout.on('data', (data: Buffer) => {
+            const chunk = data.toString();
+            output += chunk;
+            logStream.write(chunk);
+            broadcastRunEvent(runId, { type: 'log', runId, data: chunk });
+          });
+          child.stderr.on('data', (data: Buffer) => {
+            const chunk = data.toString();
+            output += chunk;
+            logStream.write(chunk);
+          });
+
+          const runTimeout = setTimeout(() => {
+            child.kill('SIGTERM');
+            const run = activeRuns.get(runId);
+            if (run) { run.status = 'failed'; run.endTime = Date.now(); run.output = 'Timed out after 120s'; }
+            updateTestCaseById(testId, { status: 'fail' }, dir, 'maestro-run');
+            setTimeout(() => activeRuns.delete(runId), 5 * 60 * 1000);
+          }, 120_000);
+
+          child.on('close', async (code) => {
+            clearTimeout(runTimeout);
+            logStream.end();
+            // Try to parse JSON result from last line of output
+            let status: 'pass' | 'fail' = code === 0 ? 'pass' : 'fail';
+            const lines = output.trim().split('\n');
+            for (let i = lines.length - 1; i >= 0; i--) {
+              try {
+                const parsed = JSON.parse(lines[i].trim());
+                if (parsed.status === 'pass' || parsed.status === 'fail') {
+                  status = parsed.status;
+                  break;
+                }
+              } catch { /* not JSON */ }
+            }
+            const run = activeRuns.get(runId);
+            if (run) { run.status = status === 'pass' ? 'passed' : 'failed'; run.endTime = Date.now(); run.output = output; }
+            updateTestCaseById(testId, { status }, dir, 'maestro-run');
+
+            const { failingStep, errorLine } = parseFailureInfo(output);
+            const screenshotPath = status === 'fail' ? await captureScreenshot(platform, runId, testId, dir) : null;
+            const record: MaestroRunRecord = {
+              runId, testId, platform: platform as any,
+              status: status as any,
+              startTime, endTime: new Date().toISOString(),
+              durationMs: run ? run.endTime! - run.startTime : 0,
+              exitCode: code ?? 1, failingStep, errorLine, screenshotPath,
+            };
+            writeRunRecord(record, dir);
+            broadcastRunEvent(runId, { type: 'done', runId, status, failingStep, errorLine, screenshotPath });
+
+            // Auto-ingest media from latest Maestro run into project mediaPath
+            try {
+              const activeRegistry = loadProjectRegistry();
+              const activeProject = activeRegistry.projects.find(p => p.id === activeRegistry.activeProject);
+              const mediaPath = (activeProject as any)?.mediaPath as string | undefined;
+              if (mediaPath) ingestLatestMaestroRun(mediaPath);
+            } catch { /* non-fatal — don't block test result */ }
+
+            setTimeout(() => activeRuns.delete(runId), 5 * 60 * 1000);
+          });
+
+          json(res, { ok: true, runId, method: 'mcp' });
+        } catch { res.writeHead(400); res.end('{"error":"Invalid request"}'); }
+      });
+      return;
+
+    } else if (pathname === '/api/flow/run' && req.method === 'POST') {
+      // Run a Maestro YAML file directly by path (from Maestro Tests view)
+      readBody(req, (body) => {
+        try {
+          const { filePath, platform } = JSON.parse(body);
+          if (!filePath || !fs.existsSync(filePath)) {
+            res.writeHead(400); res.end(JSON.stringify({ error: 'Flow file not found: ' + filePath })); return;
+          }
+
+          const runId = 'run-flow-' + Date.now();
+          const safeId = path.basename(filePath, '.yaml').replace(/[^a-zA-Z0-9-_]/g, '_');
+          activeRuns.set(runId, { testId: safeId, platform, status: 'running', startTime: Date.now(), output: '' });
+
+          const runsDir = path.join(dir, 'runs');
+          fs.mkdirSync(runsDir, { recursive: true });
+          const logStream = fs.createWriteStream(path.join(runsDir, runId + '.log'), { flags: 'a' });
+          const startTime = new Date().toISOString();
+
+          const child = spawn('maestro', ['test', filePath], {
+            env: { ...process.env },
+            cwd: process.cwd(),
+          });
+
+          let output = '';
+          child.stdout.on('data', (data: Buffer) => {
+            const chunk = data.toString();
+            output += chunk;
+            logStream.write(chunk);
+            broadcastRunEvent(runId, { type: 'log', runId, data: chunk });
+            const run = activeRuns.get(runId);
+            if (run) run.output = output;
+          });
+          child.stderr.on('data', (data: Buffer) => {
+            const chunk = data.toString();
+            output += chunk;
+            logStream.write(chunk);
+            const run = activeRuns.get(runId);
+            if (run) run.output = output;
+          });
+
+          child.on('close', async (code) => {
+            logStream.end();
+            const status = code === 0 ? 'pass' : 'fail';
+            const run = activeRuns.get(runId);
+            if (run) { run.status = status === 'pass' ? 'passed' : 'failed'; run.endTime = Date.now(); run.output = output; }
+            const { failingStep, errorLine } = parseFailureInfo(output);
+            const screenshotPath = status === 'fail' ? await captureScreenshot(platform, runId, safeId, dir) : null;
+            const record: MaestroRunRecord = {
+              runId, testId: safeId, platform: platform as any, status: status as any,
+              startTime, endTime: new Date().toISOString(),
+              durationMs: run ? (run.endTime! - run.startTime) : 0,
+              exitCode: code ?? 1, failingStep, errorLine, screenshotPath,
+            };
+            writeRunRecord(record, dir);
+            broadcastRunEvent(runId, { type: 'done', runId, status, failingStep, errorLine, screenshotPath });
+            setTimeout(() => activeRuns.delete(runId), 5 * 60 * 1000);
+          });
+
+          json(res, { ok: true, runId });
+        } catch (err) { res.writeHead(400); res.end(JSON.stringify({ error: String(err) })); }
       });
       return;
 
@@ -569,15 +998,142 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
         }
       }
 
-      if (androidPath) { scanMaestroDir(androidPath, 'android'); scanSharedFlows(androidPath, 'android'); }
-      if (iosPath) { scanMaestroDir(iosPath, 'ios'); scanSharedFlows(iosPath, 'ios'); }
+      const pathErrors: string[] = [];
+      if (androidPath) {
+        if (!fs.existsSync(androidPath)) {
+          pathErrors.push(`Android path not found: ${androidPath}`);
+        } else {
+          scanMaestroDir(androidPath, 'android');
+          scanSharedFlows(androidPath, 'android');
+        }
+      }
+      if (iosPath) {
+        if (!fs.existsSync(iosPath)) {
+          pathErrors.push(`iOS path not found: ${iosPath}`);
+        } else {
+          scanMaestroDir(iosPath, 'ios');
+          scanSharedFlows(iosPath, 'ios');
+        }
+      }
 
       json(res, {
         androidPath,
         iosPath,
+        pathErrors: pathErrors.length > 0 ? pathErrors : undefined,
         categories,
         totalFlows: categories.reduce((sum, c) => sum + c.flows.length, 0),
       });
+    } else if (pathname === '/api/runs/latest-all') {
+      const runsDir = path.join(dir, 'runs');
+      const result: Record<string, LatestRunPointer> = {};
+      if (fs.existsSync(runsDir)) {
+        const files = fs.readdirSync(runsDir).filter(f => f.endsWith('-latest.json'));
+        for (const f of files) {
+          try {
+            const pointer = JSON.parse(fs.readFileSync(path.join(runsDir, f), 'utf-8')) as LatestRunPointer;
+            // Index by testId (reversed safe transform: replace _ with - for display, but keep raw)
+            const safeTestId = f.replace('-latest.json', '');
+            result[safeTestId] = pointer;
+          } catch { /* skip */ }
+        }
+      }
+      json(res, result);
+
+    } else if (pathname.startsWith('/api/runs/') && pathname.endsWith('/latest')) {
+      // Get latest run pointer for a test
+      const testId = decodeURIComponent(pathname.replace('/api/runs/', '').replace('/latest', ''));
+      const safeTestId = testId.replace(/[^a-zA-Z0-9-_]/g, '_');
+      const pointerPath = path.join(dir, 'runs', safeTestId + '-latest.json');
+      if (fs.existsSync(pointerPath)) {
+        json(res, JSON.parse(fs.readFileSync(pointerPath, 'utf-8')));
+      } else {
+        res.writeHead(404); res.end('{"error":"No run record found"}');
+      }
+
+    } else if (pathname.startsWith('/api/runs/') && pathname.endsWith('/history')) {
+      // Get run history for a test
+      const testId = decodeURIComponent(pathname.replace('/api/runs/', '').replace('/history', ''));
+      const runsDir = path.join(dir, 'runs');
+      if (!fs.existsSync(runsDir)) { json(res, []); return; }
+      const files = fs.readdirSync(runsDir).filter(f => f.endsWith('.json') && !f.endsWith('-latest.json'));
+      const history: MaestroRunRecord[] = [];
+      for (const f of files) {
+        try {
+          const rec = JSON.parse(fs.readFileSync(path.join(runsDir, f), 'utf-8')) as MaestroRunRecord;
+          if (rec.testId === testId) history.push(rec);
+        } catch { /* skip */ }
+      }
+      history.sort((a, b) => b.startTime.localeCompare(a.startTime));
+      json(res, history.slice(0, 20)); // last 20 runs
+
+    } else if (pathname.startsWith('/api/bugs/') && pathname.endsWith('/sync-jira') && req.method === 'POST') {
+      const bugId = decodeURIComponent(pathname.replace('/api/bugs/', '').replace('/sync-jira', ''));
+      const bugs = loadAllBugs(dir);
+      const bug = bugs.find(b => b.id === bugId);
+      if (!bug?.jiraKey) { res.writeHead(400); res.end('{"error":"No Jira key on this bug"}'); return; }
+
+      const registry = loadProjectRegistry();
+      const project = registry.projects.find(p => p.id === registry.activeProject);
+      const jiraCfg = (project as any)?.jira as { cloudId?: string; baseUrl?: string; token?: string; projectKey?: string } | undefined;
+      if (!jiraCfg?.token || !jiraCfg?.cloudId) {
+        res.writeHead(400); res.end('{"error":"Jira not configured (missing token or cloudId in projects.json)"}'); return;
+      }
+
+      (async () => {
+        try {
+          // Fetch from Jira REST API v3
+          const baseUrl = jiraCfg.baseUrl || `https://api.atlassian.com/ex/jira/${jiraCfg.cloudId}`;
+          const issueUrl = `${baseUrl}/rest/api/3/issue/${bug.jiraKey}?fields=summary,status,assignee,priority,comment,labels,description`;
+          const response = await fetch(issueUrl, {
+            headers: {
+              'Authorization': `Bearer ${jiraCfg.token}`,
+              'Accept': 'application/json',
+            },
+          });
+          if (!response.ok) {
+            res.writeHead(response.status); res.end(JSON.stringify({ error: 'Jira API error: ' + response.statusText })); return;
+          }
+          const jiraData = await response.json() as any;
+          const fields = jiraData.fields;
+          const jiraStatus = fields.status?.name ?? '';
+          const jiraAssignee = fields.assignee?.displayName ?? '';
+          const jiraPriority = fields.priority?.name ?? '';
+          const comments = fields.comment?.comments ?? [];
+          const jiraLastComment = comments.length > 0 ? (comments[comments.length - 1]?.body?.content?.[0]?.content?.[0]?.text ?? '') : '';
+          const jiraLastSynced = new Date().toISOString();
+
+          // Map Jira status to Morbius bug status
+          let newStatus = bug.status;
+          if (['Done', 'Resolved', 'Closed'].includes(jiraStatus)) newStatus = 'fixed';
+          else if (jiraStatus === 'In Progress') newStatus = 'investigating';
+
+          updateBugById(bugId, {
+            status: newStatus,
+            jiraStatus, jiraAssignee, jiraPriority, jiraLastComment, jiraLastSynced,
+            assignee: jiraAssignee || bug.assignee,
+          } as any, dir);
+
+          json(res, { ok: true, jiraStatus, jiraAssignee, jiraPriority, jiraLastComment, newStatus });
+        } catch (err) {
+          res.writeHead(500); res.end(JSON.stringify({ error: String(err) }));
+        }
+      })();
+      return;
+
+    } else if (pathname === '/api/bugs/sync-all' && req.method === 'POST') {
+      const bugs = loadAllBugs(dir);
+      const jiraBugs = bugs.filter(b => b.jiraKey);
+      // Fire-and-forget sequential sync
+      (async () => {
+        for (const b of jiraBugs) {
+          try {
+            await fetch(`http://localhost:${serverPort}/api/bugs/${encodeURIComponent(b.id)}/sync-jira`, { method: 'POST' });
+          } catch { /* continue */ }
+        }
+      })();
+      json(res, { ok: true, total: jiraBugs.length, message: `Syncing ${jiraBugs.length} Jira bugs in background` });
+      return;
+
     } else {
       res.writeHead(404);
       res.end('{"error":"Not found"}');
@@ -604,9 +1160,48 @@ function slugify(text: string): string {
 }
 
 function serveScreenshot(pathname: string, res: http.ServerResponse): void {
-  const filePath = path.resolve(DATA_DIR, pathname.replace(/^\//, ''));
-  // Security: ensure resolved path is under DATA_DIR
-  if (!filePath.startsWith(path.resolve(DATA_DIR))) {
+  // Try in active project dir first (for run screenshots), then fall back to DATA_DIR root
+  const projectDir = getActiveProjectDir();
+  const relativePath = pathname.replace(/^\//, '');
+
+  const candidates = [
+    path.resolve(projectDir, relativePath),
+    path.resolve(DATA_DIR, relativePath),
+  ];
+
+  for (const filePath of candidates) {
+    // Security: ensure resolved path is under DATA_DIR
+    if (!filePath.startsWith(path.resolve(DATA_DIR))) continue;
+    if (!fs.existsSync(filePath)) continue;
+
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeTypes: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif' };
+    res.writeHead(200, { 'Content-Type': mimeTypes[ext] ?? 'application/octet-stream' });
+    fs.createReadStream(filePath).pipe(res);
+    return;
+  }
+
+  res.writeHead(404);
+  res.end('Not found');
+}
+
+function serveMedia(pathname: string, res: http.ServerResponse): void {
+  const registry = loadProjectRegistry();
+  const project = registry.projects.find(p => p.id === registry.activeProject);
+  const mediaPath = (project as any)?.mediaPath as string | undefined;
+
+  if (!mediaPath) {
+    res.writeHead(404);
+    res.end('No mediaPath configured for this project');
+    return;
+  }
+
+  // Strip leading /media/ and resolve under mediaPath
+  const relative = pathname.replace(/^\/media\//, '');
+  const filePath = path.resolve(mediaPath, relative);
+
+  // Security: stay under mediaPath
+  if (!filePath.startsWith(path.resolve(mediaPath))) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
@@ -616,10 +1211,134 @@ function serveScreenshot(pathname: string, res: http.ServerResponse): void {
     res.end('Not found');
     return;
   }
+
   const ext = path.extname(filePath).toLowerCase();
-  const mimeTypes: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif' };
-  res.writeHead(200, { 'Content-Type': mimeTypes[ext] ?? 'application/octet-stream' });
-  fs.createReadStream(filePath).pipe(res);
+  const mimeTypes: Record<string, string> = {
+    '.mp4': 'video/mp4',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+  };
+  const contentType = mimeTypes[ext] ?? 'application/octet-stream';
+
+  // Support HTTP Range requests for video seeking
+  const stat = fs.statSync(filePath);
+  const rangeHeader = res.req?.headers?.range ?? (res as any)._req?.headers?.range;
+  if (rangeHeader && ext === '.mp4') {
+    const [startStr, endStr] = rangeHeader.replace('bytes=', '').split('-');
+    const start = parseInt(startStr, 10);
+    const end = endStr ? parseInt(endStr, 10) : stat.size - 1;
+    const chunkSize = end - start + 1;
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunkSize,
+      'Content-Type': contentType,
+    });
+    fs.createReadStream(filePath, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, { 'Content-Type': contentType, 'Content-Length': stat.size, 'Accept-Ranges': 'bytes' });
+    fs.createReadStream(filePath).pipe(res);
+  }
+}
+
+interface MediaRun {
+  timestamp: string;
+  videos: string[];
+  screenshots: string[];
+  sizeMb: number;
+}
+
+/**
+ * Copy latest ~/.maestro/tests/<timestamp>/ into <mediaPath>/runs/<timestamp>/
+ * Returns the run metadata, or null if nothing to copy.
+ */
+function ingestLatestMaestroRun(mediaPath: string): MediaRun | null {
+  const HOME = process.env.HOME ?? '';
+  const maestroTestsDir = path.join(HOME, '.maestro', 'tests');
+  if (!fs.existsSync(maestroTestsDir)) return null;
+
+  // Find most recent timestamp dir
+  const entries = fs.readdirSync(maestroTestsDir)
+    .filter(e => /^\d{4}-\d{2}-\d{2}_\d{6}$/.test(e))
+    .sort()
+    .reverse();
+  if (entries.length === 0) return null;
+
+  const timestamp = entries[0];
+  const srcDir = path.join(maestroTestsDir, timestamp);
+  const destDir = path.join(mediaPath, 'runs', timestamp);
+
+  // Already ingested
+  if (fs.existsSync(destDir)) {
+    return buildMediaRunMeta(destDir, timestamp);
+  }
+
+  // Copy videos
+  const videos: string[] = [];
+  const srcVideos = path.join(srcDir, 'videos');
+  if (fs.existsSync(srcVideos)) {
+    const destVideos = path.join(destDir, 'videos');
+    fs.mkdirSync(destVideos, { recursive: true });
+    for (const f of fs.readdirSync(srcVideos).filter(f => f.endsWith('.mp4'))) {
+      fs.copyFileSync(path.join(srcVideos, f), path.join(destVideos, f));
+      videos.push(f);
+    }
+  }
+
+  // Copy screenshots (in per-flow subdirs or root)
+  const screenshots: string[] = [];
+  const destScreenshots = path.join(destDir, 'screenshots');
+  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name !== 'videos') {
+      const subScreenshotsDir = path.join(srcDir, entry.name, 'screenshots');
+      if (fs.existsSync(subScreenshotsDir)) {
+        fs.mkdirSync(destScreenshots, { recursive: true });
+        for (const f of fs.readdirSync(subScreenshotsDir).filter(f => /\.(png|jpg|jpeg)$/i.test(f))) {
+          const dest = path.join(destScreenshots, `${entry.name}_${f}`);
+          fs.copyFileSync(path.join(subScreenshotsDir, f), dest);
+          screenshots.push(`${entry.name}_${f}`);
+        }
+      }
+    }
+  }
+
+  return buildMediaRunMeta(destDir, timestamp);
+}
+
+function buildMediaRunMeta(runDir: string, timestamp: string): MediaRun {
+  const videos = fs.existsSync(path.join(runDir, 'videos'))
+    ? fs.readdirSync(path.join(runDir, 'videos')).filter(f => f.endsWith('.mp4'))
+    : [];
+  const screenshots = fs.existsSync(path.join(runDir, 'screenshots'))
+    ? fs.readdirSync(path.join(runDir, 'screenshots')).filter(f => /\.(png|jpg|jpeg)$/i.test(f))
+    : [];
+
+  // Calculate total size
+  let totalBytes = 0;
+  const walkDir = (d: string) => {
+    if (!fs.existsSync(d)) return;
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isFile()) totalBytes += fs.statSync(p).size;
+      else if (e.isDirectory()) walkDir(p);
+    }
+  };
+  walkDir(runDir);
+
+  return { timestamp, videos, screenshots, sizeMb: Math.round(totalBytes / 1024 / 1024 * 10) / 10 };
+}
+
+/**
+ * List all ingested run directories for the active project's mediaPath.
+ */
+function listMediaRuns(mediaPath: string): MediaRun[] {
+  const runsDir = path.join(mediaPath, 'runs');
+  if (!fs.existsSync(runsDir)) return [];
+  return fs.readdirSync(runsDir, { withFileTypes: true })
+    .filter(e => e.isDirectory() && /^\d{4}-\d{2}-\d{2}_\d{6}$/.test(e.name))
+    .sort((a, b) => b.name.localeCompare(a.name)) // newest first
+    .map(e => buildMediaRunMeta(path.join(runsDir, e.name), e.name));
 }
 
 function buildDashboardData(dir?: string) {
@@ -773,6 +1492,10 @@ function generateHtml(): string {
         <a class="nav-item" data-view="appmap" onclick="navigate('appmap')">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="5" y2="17"/><line x1="12" y1="7" x2="19" y2="17"/></svg>
           <span>App Map</span>
+        </a>
+        <a class="nav-item" data-view="coverage" onclick="navigate('coverage')">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          <span>Coverage</span>
         </a>
       </div>
       <div class="sidebar-categories" id="sidebarCategories"></div>
@@ -1356,11 +2079,12 @@ function generateCSS(): string {
       border: 1px solid var(--border-subtle);
       border-radius: var(--radius-lg);
       padding: 32px;
-      overflow-x: auto;
+      overflow: auto;
       min-height: 400px;
+      max-height: calc(100vh - 220px);
     }
-    .appmap-container .mermaid { text-align: center; }
-    .appmap-container .mermaid svg { max-width: 100%; height: auto; }
+    .appmap-container .mermaid { text-align: left; display: inline-block; min-width: 100%; }
+    .appmap-container .mermaid svg { max-width: none; height: auto; display: block; }
     .appmap-zoom-controls { display: flex; align-items: center; gap: 4px; }
     .appmap-zoom-btn {
       width: 28px; height: 28px;
@@ -2193,6 +2917,100 @@ function generateCSS(): string {
     .dash-card:nth-child(5) { animation-delay: 200ms; }
     .dash-card:nth-child(6) { animation-delay: 250ms; }
     .card { animation: fadeIn 200ms ease both; }
+
+    /* Run log streaming */
+    .run-log-box {
+      background: #0a0a0a;
+      border: 1px solid #222;
+      border-radius: 4px;
+      padding: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      height: 180px;
+      overflow-y: auto;
+      margin-top: 8px;
+    }
+    .log-line { color: #ccc; margin: 1px 0; white-space: pre-wrap; word-break: break-all; }
+    .log-line.log-fail { color: #E5484D; }
+    .log-line.log-pass { color: #45E0A8; }
+    .run-error-detail { background: #1a0a0a; border-left: 3px solid #E5484D; padding: 8px 12px; font-size: 12px; color: #E5484D; border-radius: 0 4px 4px 0; margin-top: 8px; }
+    .run-failing-step { background: #111; border-left: 3px solid #F5A623; padding: 8px 12px; font-family: monospace; font-size: 11px; color: #F5A623; margin-top: 4px; border-radius: 0 4px 4px 0; }
+    .btn-autofix { background: #1a1a2e; border: 1px solid #4a4a8a; color: #8888ff; margin-top: 8px; }
+    .btn-autofix:hover { background: #2a2a4e; border-color: #6666cc; }
+
+    /* Screenshot thumbnail on Kanban cards */
+    .card-screenshot-thumb {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      width: 80px;
+      height: 45px;
+      border-radius: 3px;
+      overflow: hidden;
+      cursor: pointer;
+      border: 1px solid #333;
+    }
+    .card-screenshot-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .thumb-status {
+      position: absolute; bottom: 2px; right: 2px;
+      font-size: 9px; padding: 1px 3px; border-radius: 2px; font-weight: bold;
+    }
+    .thumb-status-pass { background: #45E0A8; color: #000; }
+    .thumb-status-fail { background: #E5484D; color: #fff; }
+
+    /* Failure detail modal */
+    .failure-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.92);
+      display: grid;
+      grid-template-columns: 60% 40%;
+      z-index: 2000;
+      cursor: default;
+    }
+    .failure-modal-screenshot {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: #050505;
+      overflow: hidden;
+    }
+    .failure-modal-details {
+      background: #111;
+      border-left: 1px solid #333;
+      padding: 24px;
+      overflow-y: auto;
+      font-size: 13px;
+    }
+    .failure-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .failure-value { color: #E5484D; font-family: monospace; font-size: 12px; }
+    .failure-error-line, .failure-failing-step { margin-bottom: 16px; }
+
+    /* Jira sync button on bug cards */
+    .btn-jira-sync {
+      font-size: 10px;
+      padding: 2px 6px;
+      background: #0052cc22;
+      border: 1px solid #0052cc66;
+      color: #4c9aff;
+      border-radius: 3px;
+      cursor: pointer;
+      float: right;
+      margin-top: -2px;
+    }
+    .btn-jira-sync:hover { background: #0052cc44; }
+    .btn-jira-sync:disabled { opacity: 0.5; cursor: wait; }
+    .jira-status-badge {
+      display: inline-block;
+      font-size: 10px;
+      padding: 1px 5px;
+      background: #0052cc33;
+      border: 1px solid #0052cc55;
+      color: #4c9aff;
+      border-radius: 10px;
+      margin-left: 4px;
+    }
   `;
 }
 
@@ -2364,14 +3182,25 @@ function generateJS(): string {
 
     async function loadData() {
       try {
-        const [testsRes, bugsRes, catsRes] = await Promise.all([
+        const [testsRes, bugsRes, catsRes, latestRunsRes] = await Promise.all([
           fetch('/api/tests'),
           fetch('/api/bugs'),
           fetch('/api/categories'),
+          fetch('/api/runs/latest-all'),
         ]);
         allTests = await testsRes.json();
         allBugs = await bugsRes.json();
         allCategories = await catsRes.json();
+        // Merge latest run pointers into tests
+        try {
+          const latestRuns = await latestRunsRes.json();
+          for (const test of allTests) {
+            const safeId = test.id.replace(/[^a-zA-Z0-9-_]/g, '_');
+            if (latestRuns[safeId]) {
+              test._latestRun = latestRuns[safeId];
+            }
+          }
+        } catch { /* non-fatal */ }
         renderSidebarCategories();
       } catch (err) {
         console.error('Failed to load data:', err);
@@ -2432,6 +3261,10 @@ function generateJS(): string {
         case 'appmap':
           breadcrumb.textContent = 'App Map';
           renderAppMap(container);
+          break;
+        case 'coverage':
+          breadcrumb.textContent = 'Coverage';
+          renderCoverage(container);
           break;
       }
     }
@@ -2670,10 +3503,18 @@ function generateJS(): string {
         for (const test of tests) {
           const devices = test.deviceResults ? test.deviceResults.length : 0;
           const bugs = allBugs.filter(b => b.linkedTest === test.id).length;
-          cardsHtml += '<div class="card status-' + test.status + '" onclick="openTestDetail(\\'' + test.id + '\\')">' +
+          // Screenshot thumbnail — latest run pointer is embedded in allTests if available
+          const latestRun = test._latestRun;
+          const thumbHtml = latestRun?.screenshotPath
+            ? '<div class="card-screenshot-thumb" onclick="event.stopPropagation();openFailureModal(\\'' + test.id + '\\', null)" title="' + (latestRun.status === 'fail' ? 'Click to see failure details' : 'Last run screenshot') + '">' +
+                '<img src="/' + latestRun.screenshotPath + '" onerror="this.parentElement.style.display=\\'none\\';" />' +
+                '<span class="thumb-status thumb-status-' + latestRun.status + '">' + (latestRun.status === 'pass' ? '\\u2713' : '\\u2717') + '</span>' +
+              '</div>'
+            : '';
+          cardsHtml += '<div class="card status-' + test.status + '" onclick="openTestDetail(\\'' + test.id + '\\')" style="position:relative">' +
             '<div class="card-actions">' +
-              '<button class="move-btn" onclick="moveCard(\\'' + test.id + '\\', \\'up\\', event)" title="Move up">↑</button>' +
-              '<button class="move-btn" onclick="moveCard(\\'' + test.id + '\\', \\'down\\', event)" title="Move down">↓</button>' +
+              '<button class="move-btn" onclick="moveCard(\\'' + test.id + '\\', \\'up\\', event)" title="Move up">&#8593;</button>' +
+              '<button class="move-btn" onclick="moveCard(\\'' + test.id + '\\', \\'down\\', event)" title="Move down">&#8595;</button>' +
             '</div>' +
             '<div class="card-id">' + esc(test.id) + '</div>' +
             '<div class="card-title">' + esc(test.title) + '</div>' +
@@ -2682,6 +3523,7 @@ function generateJS(): string {
               (devices > 0 ? '<span>' + devices + ' devices</span>' : '') +
               (bugs > 0 ? '<span>' + bugs + ' bug' + (bugs > 1 ? 's' : '') + '</span>' : '') +
             '</div>' +
+            thumbHtml +
           '</div>';
         }
 
@@ -2782,9 +3624,86 @@ function generateJS(): string {
       }
     }
 
+    async function runFlowFile(filePath, platform, statusId) {
+      const statusEl = document.getElementById(statusId);
+      if (statusEl) statusEl.innerHTML = '<div class="run-spinner">Starting on ' + platform + '...</div>';
+      try {
+        const res = await fetch('/api/flow/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filePath, platform })
+        });
+        const data = await res.json();
+        if (data.error) {
+          if (statusEl) statusEl.innerHTML = '<div class="run-error">' + esc(data.error) + '</div>';
+          return;
+        }
+        pollRunStatus(data.runId, filePath, statusId);
+      } catch (err) {
+        if (statusEl) statusEl.innerHTML = '<div class="run-error">Failed to start: ' + err + '</div>';
+      }
+    }
+
     function pollRunStatus(runId, testId, statusId) {
       const statusEl = document.getElementById(statusId);
       const startTime = Date.now();
+
+      // Try WebSocket first, fall back to polling
+      let wsConnected = false;
+      try {
+        const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(wsProto + '//' + location.host + '/ws/run-stream');
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ type: 'subscribe', runId }));
+          wsConnected = true;
+        };
+        ws.onmessage = (evt) => {
+          const msg = JSON.parse(evt.data);
+          const elapsed = Math.round((Date.now() - startTime) / 1000);
+          if (msg.type === 'log') {
+            if (statusEl) {
+              let logBox = statusEl.querySelector('.run-log-box');
+              if (!logBox) {
+                statusEl.innerHTML = '<div class="run-spinner" style="margin-bottom:4px">Running... ' + elapsed + 's</div><div class="run-log-box"></div>';
+                logBox = statusEl.querySelector('.run-log-box');
+              }
+              if (logBox) {
+                const line = document.createElement('div');
+                const text = msg.data.trim();
+                if (!text) return;
+                line.className = 'log-line' + (text.includes('FAILED') || text.includes('Error') ? ' log-fail' : text.includes('Passed') || text.includes('\\u2713') ? ' log-pass' : '');
+                line.textContent = text;
+                logBox.appendChild(line);
+                logBox.scrollTop = logBox.scrollHeight;
+              }
+            }
+          } else if (msg.type === 'done') {
+            ws.close();
+            const icon = msg.status === 'pass' ? '\\u2713' : '\\u2717';
+            const cls = msg.status === 'pass' ? 'run-pass' : 'run-fail';
+            let detailHtml = '';
+            if (msg.status === 'fail' && msg.errorLine) {
+              detailHtml = '<div class="run-error-detail">' + esc(msg.errorLine) + '</div>';
+              if (msg.failingStep) detailHtml += '<div class="run-failing-step">' + esc(msg.failingStep) + '</div>';
+              detailHtml += '<button class="btn-run btn-autofix" onclick="autoFixTest(\\'' + testId + '\\')">\\u26a1 Auto-Fix with Claude</button>';
+            }
+            const existingLogBox = statusEl ? statusEl.querySelector('.run-log-box') : null;
+            if (statusEl) statusEl.innerHTML = '<div class="' + cls + '">' + icon + ' ' + (msg.status === 'pass' ? 'PASS' : 'FAIL') + ' (' + elapsed + 's)</div>' + detailHtml + (existingLogBox ? existingLogBox.outerHTML : '');
+            loadData().then(() => {
+              if (currentView === 'tests') renderTestBoard(document.getElementById('view-container'));
+            });
+          }
+        };
+        ws.onerror = () => {
+          if (!wsConnected) fallbackPoll(runId, testId, statusId, startTime);
+        };
+      } catch {
+        fallbackPoll(runId, testId, statusId, startTime);
+      }
+    }
+
+    function fallbackPoll(runId, testId, statusId, startTime) {
+      const statusEl = document.getElementById(statusId);
       const interval = setInterval(async () => {
         try {
           const res = await fetch('/api/test/run/' + runId + '/status');
@@ -2794,17 +3713,124 @@ function generateJS(): string {
             if (statusEl) statusEl.innerHTML = '<div class="run-spinner">Running... ' + elapsed + 's</div>';
           } else {
             clearInterval(interval);
-            const icon = data.status === 'passed' ? '✓' : '✗';
+            const icon = data.status === 'passed' ? '\\u2713' : '\\u2717';
             const cls = data.status === 'passed' ? 'run-pass' : 'run-fail';
             if (statusEl) statusEl.innerHTML = '<div class="' + cls + '">' + icon + ' ' + data.status.toUpperCase() + ' (' + elapsed + 's)</div>';
             await loadData();
-            // Don't re-render full board, just update the detail if open
           }
         } catch {
           clearInterval(interval);
-          if (statusEl) statusEl.innerHTML = '<div class="run-error">Lost connection to server</div>';
+          if (statusEl) statusEl.innerHTML = '<div class="run-error">Lost connection</div>';
         }
       }, 2000);
+    }
+
+    async function autoFixTest(testId) {
+      const platform = allTests.find(t => t.id === testId)?.maestroFlowAndroid ? 'android' : 'ios';
+      showToast('Starting auto-repair for ' + testId + '...');
+      try {
+        const res = await fetch('/api/test/repair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ testId, platform, maxRetries: 3 }),
+        });
+        const data = await res.json();
+        if (data.repairId) {
+          showToast('Repair started \\u2014 ID: ' + data.repairId);
+          pollRepairStatus(data.repairId, testId);
+        } else {
+          showToast('Repair error: ' + (data.error || 'unknown'));
+        }
+      } catch (err) {
+        showToast('Auto-fix failed: ' + err.message);
+      }
+    }
+
+    function pollRepairStatus(repairId, testId) {
+      const interval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/test/repair/' + repairId + '/status');
+          const data = await res.json();
+          if (data.status !== 'running') {
+            clearInterval(interval);
+            const msg = data.status === 'pass'
+              ? '\\u2713 Auto-fix succeeded for ' + testId
+              : data.status === 'escalated'
+              ? '\\u26a0 Auto-fix escalated \\u2014 needs human review'
+              : '\\u2717 Auto-fix failed after ' + data.attempt + ' attempts';
+            showToast(msg);
+            await loadData();
+          }
+        } catch { clearInterval(interval); }
+      }, 3000);
+    }
+
+    async function openFailureModal(testId, runId) {
+      let latestPointer = null;
+      try {
+        const latest = await fetch('/api/runs/' + encodeURIComponent(testId) + '/latest');
+        if (latest.ok) latestPointer = await latest.json();
+      } catch {}
+
+      const actualRunId = runId || latestPointer?.runId;
+      if (!actualRunId && !latestPointer) {
+        showToast('No run record available');
+        return;
+      }
+
+      const screenshotPath = latestPointer?.screenshotPath;
+      const errorLine = latestPointer?.errorLine;
+      const failingStep = latestPointer?.failingStep;
+      const runTime = latestPointer?.timestamp ? new Date(latestPointer.timestamp).toLocaleString() : 'Unknown';
+
+      let html = '<div class="failure-modal" onclick="if(event.target===this)closeFailureModal()" id="failure-modal">' +
+        '<div class="failure-modal-screenshot">' +
+          (screenshotPath
+            ? '<img src="/' + screenshotPath + '" alt="Failure Screenshot" style="max-width:100%;max-height:90vh;object-fit:contain;" />'
+            : '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#888">No screenshot available</div>') +
+        '</div>' +
+        '<div class="failure-modal-details">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+            '<div class="detail-id">' + esc(testId) + '</div>' +
+            '<button onclick="closeFailureModal()" style="background:none;border:none;color:#888;font-size:20px;cursor:pointer">\\u2715</button>' +
+          '</div>' +
+          '<div style="color:#888;font-size:12px;margin-bottom:16px">' + esc(runTime) + '</div>' +
+          (errorLine ? '<div class="failure-error-line"><div class="failure-label">Error</div><div class="failure-value">' + esc(errorLine) + '</div></div>' : '') +
+          (failingStep ? '<div class="failure-failing-step"><div class="failure-label">Failing Step</div><pre class="run-log-box" style="height:auto;max-height:120px">' + esc(failingStep) + '</pre></div>' : '') +
+          '<div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">' +
+            '<button class="btn-run btn-autofix" onclick="closeFailureModal();autoFixTest(\\'' + testId + '\\')">\\u26a1 Auto-Fix with Claude</button>' +
+            '<button class="btn-secondary" onclick="openTestDetail(\\'' + testId + '\\');closeFailureModal()">View Details</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+      document.body.insertAdjacentHTML('beforeend', html);
+    }
+
+    function closeFailureModal() {
+      const modal = document.getElementById('failure-modal');
+      if (modal) modal.remove();
+    }
+
+    async function syncBugFromJira(bugId, event) {
+      if (event) event.stopPropagation();
+      const btn = event?.target;
+      if (btn) { btn.textContent = '\\u21bb Syncing...'; btn.disabled = true; }
+      try {
+        const res = await fetch('/api/bugs/' + encodeURIComponent(bugId) + '/sync-jira', { method: 'POST' });
+        const data = await res.json();
+        if (data.ok) {
+          showToast('Synced from Jira: ' + data.jiraStatus);
+          await loadData();
+          if (currentView === 'bugs') renderBugBoard(document.getElementById('view-container'));
+        } else {
+          showToast('Jira sync failed: ' + (data.error || 'unknown'));
+          if (btn) { btn.textContent = '\\u21bb Jira'; btn.disabled = false; }
+        }
+      } catch (err) {
+        showToast('Jira sync error: ' + err.message);
+        if (btn) { btn.textContent = '\\u21bb Jira'; btn.disabled = false; }
+      }
     }
 
     // ==========================================
@@ -2927,8 +3953,14 @@ function generateJS(): string {
           const isJira = bug.source === 'jira';
           const jiraBadge = isJira ? '<span class="jira-badge" title="From Jira">J</span> ' : '';
           const bugDisplayId = isJira ? (bug.jiraKey || bug.id) : bug.id;
+          const jiraSyncBtn = bug.jiraKey
+            ? '<button class="btn-jira-sync" onclick="syncBugFromJira(\\'' + bug.id + '\\', event)" title="Sync from Jira">&#8635; Jira</button>'
+            : '';
+          const jiraStatusBadge = bug.jiraStatus
+            ? '<span class="jira-status-badge">' + esc(bug.jiraStatus) + '</span>'
+            : '';
           cardsHtml += '<div class="card status-' + (status === 'open' ? 'fail' : status === 'fixed' ? 'pass' : 'flaky') + '" onclick="openBugDetail(\\'' + bug.id + '\\')">' +
-            '<div class="card-id">' + jiraBadge + esc(bugDisplayId) + ' <span class="priority-dot priority-' + bug.priority + '"></span></div>' +
+            '<div class="card-id">' + jiraBadge + esc(bugDisplayId) + ' <span class="priority-dot priority-' + bug.priority + '"></span>' + jiraStatusBadge + jiraSyncBtn + '</div>' +
             '<div class="card-title">' + esc(bug.title) + '</div>' +
             thumbHtml +
             '<div class="card-meta">' +
@@ -3162,6 +4194,18 @@ function generateJS(): string {
           '</div>' +
         '</div>';
 
+        // Run Flow buttons
+        const runStatusId = 'run-status-flow-' + Date.now();
+        let runBtns = '';
+        if (androidFlow) runBtns += '<button class="btn-run" onclick="runFlowFile(\\'' + androidFlow.filePath + '\\', \\'android\\', \\'' + runStatusId + '\\')">▶ Run Android</button>';
+        if (iosFlow) runBtns += '<button class="btn-run" onclick="runFlowFile(\\'' + iosFlow.filePath + '\\', \\'ios\\', \\'' + runStatusId + '\\')">▶ Run iOS</button>';
+        if (runBtns) {
+          html += '<div class="detail-section"><div class="detail-section-title">Run Flow</div>' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap">' + runBtns + '</div>' +
+            '<div id="' + runStatusId + '" class="run-status-box"></div>' +
+          '</div>';
+        }
+
         // Human-readable steps
         if (flow.steps && flow.steps.length > 0) {
           html += '<div class="detail-section">' +
@@ -3234,7 +4278,9 @@ function generateJS(): string {
         if (iosFlow) html += '<div style="font-size:11px;color:var(--text-tertiary);font-family:var(--font-mono);padding:3px 0;word-break:break-all">iOS: ' + esc(iosFlow.filePath) + '</div>';
         html += '</div>';
 
+        // Last Run media — fetch async then inject into panel
         showDetail(html);
+        loadAndInjectMedia();
       } catch (err) {
         console.error('Failed to load flow detail:', err);
       }
@@ -3256,6 +4302,95 @@ function generateJS(): string {
         if (androidTab) androidTab.classList.remove('active');
         if (iosTab) iosTab.classList.add('active');
       }
+    }
+
+    async function loadAndInjectMedia() {
+      try {
+        const res = await fetch('/api/runs/media');
+        const data = await res.json();
+        if (data.error || !data.runs || data.runs.length === 0) return;
+
+        const latest = data.runs[0]; // newest first
+        if (!latest.videos || latest.videos.length === 0) return;
+
+        // Build "Last Run" section HTML
+        const ts = latest.timestamp; // e.g. "2026-04-08_143022"
+        const dateStr = ts.replace('_', ' ').replace(/(\d{4})-(\d{2})-(\d{2}) (\d{2})(\d{2})(\d{2})/, '$3/$2/$1 $4:$5');
+        const sizeStr = latest.sizeMb + ' MB';
+
+        let mediaHtml = '<div class="detail-section" id="media-section">' +
+          '<div class="detail-section-title" style="display:flex;align-items:center;justify-content:space-between">' +
+            '<span>Last Run — ' + esc(dateStr) + '</span>' +
+            '<span style="font-size:11px;color:var(--text-tertiary)">' + sizeStr + ' · ' + latest.videos.length + ' video' + (latest.videos.length !== 1 ? 's' : '') + '</span>' +
+          '</div>';
+
+        // Video player for each video
+        for (const videoFile of latest.videos) {
+          const videoUrl = '/media/runs/' + encodeURIComponent(ts) + '/videos/' + encodeURIComponent(videoFile);
+          mediaHtml += '<div style="margin-bottom:12px">' +
+            '<video controls preload="metadata" style="width:100%;border-radius:6px;background:#000;max-height:320px" src="' + videoUrl + '">' +
+              'Your browser does not support video.' +
+            '</video>' +
+            '<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;font-family:var(--font-mono)">' + esc(videoFile) + '</div>' +
+          '</div>';
+        }
+
+        // Screenshots if any
+        if (latest.screenshots && latest.screenshots.length > 0) {
+          mediaHtml += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">';
+          for (const imgFile of latest.screenshots) {
+            const imgUrl = '/media/runs/' + encodeURIComponent(ts) + '/screenshots/' + encodeURIComponent(imgFile);
+            mediaHtml += '<img src="' + imgUrl + '" style="height:80px;border-radius:4px;border:1px solid var(--border);cursor:pointer;object-fit:cover" onclick="window.open(\\'' + imgUrl + '\\')" />';
+          }
+          mediaHtml += '</div>';
+        }
+
+        // Run selector dropdown if multiple runs
+        if (data.runs.length > 1) {
+          mediaHtml += '<div style="margin-top:10px">' +
+            '<select onchange="switchMediaRun(this.value)" style="background:var(--surface);border:1px solid var(--border);color:var(--text-secondary);padding:4px 8px;border-radius:var(--radius);font-size:12px;width:100%">';
+          for (const run of data.runs) {
+            const runDate = run.timestamp.replace('_', ' ').replace(/(\d{4})-(\d{2})-(\d{2}) (\d{2})(\d{2})(\d{2})/, '$3/$2/$1 $4:$5');
+            mediaHtml += '<option value="' + esc(run.timestamp) + '"' + (run.timestamp === ts ? ' selected' : '') + '>' + esc(runDate) + ' · ' + run.videos.length + ' videos · ' + run.sizeMb + ' MB</option>';
+          }
+          mediaHtml += '</select></div>';
+        }
+
+        mediaHtml += '</div>';
+
+        // Inject before File Paths section (append to detail panel)
+        const detailPanel = document.getElementById('detail-panel');
+        if (detailPanel) {
+          const filePathsSections = detailPanel.querySelectorAll('.detail-section');
+          const lastSection = filePathsSections[filePathsSections.length - 1];
+          if (lastSection) lastSection.insertAdjacentHTML('beforebegin', mediaHtml);
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    async function switchMediaRun(timestamp) {
+      try {
+        const res = await fetch('/api/runs/media');
+        const data = await res.json();
+        const run = data.runs.find(r => r.timestamp === timestamp);
+        if (!run) return;
+
+        const section = document.getElementById('media-section');
+        if (!section) return;
+
+        let html = '';
+        for (const videoFile of (run.videos || [])) {
+          const videoUrl = '/media/runs/' + encodeURIComponent(timestamp) + '/videos/' + encodeURIComponent(videoFile);
+          html += '<div style="margin-bottom:12px">' +
+            '<video controls preload="metadata" style="width:100%;border-radius:6px;background:#000;max-height:320px" src="' + videoUrl + '">' +
+            '</video>' +
+            '<div style="font-size:11px;color:var(--text-tertiary);margin-top:4px;font-family:var(--font-mono)">' + esc(videoFile) + '</div>' +
+          '</div>';
+        }
+        // Re-render videos inside the section (keep title and selector)
+        const videoContainer = section.querySelector('#media-videos');
+        if (videoContainer) videoContainer.innerHTML = html;
+      } catch { /* non-fatal */ }
     }
 
     // ==========================================
@@ -3609,12 +4744,36 @@ function generateJS(): string {
         appmapScale = Math.max(0.3, Math.min(3, appmapScale + delta));
       }
       const container = document.getElementById('appmapContainer');
-      if (container) {
-        const svg = container.querySelector('svg');
-        if (svg) {
-          svg.style.transform = 'scale(' + appmapScale + ')';
-          svg.style.transformOrigin = 'top center';
-          svg.style.transition = 'transform 200ms ease';
+      if (!container) return;
+      const mermaidDiv = container.querySelector('.mermaid');
+      const svg = container.querySelector('svg');
+      if (svg) {
+        // Store natural (unscaled) dimensions once, before any transforms applied
+        if (!svg.dataset.nw) {
+          svg.dataset.nw = String(svg.scrollWidth);
+          svg.dataset.nh = String(svg.scrollHeight);
+        }
+        const nw = parseFloat(svg.dataset.nw) || svg.scrollWidth;
+        const nh = parseFloat(svg.dataset.nh) || svg.scrollHeight;
+
+        svg.style.transform = 'scale(' + appmapScale + ')';
+        svg.style.transformOrigin = 'top left';
+        svg.style.transition = 'transform 200ms ease';
+
+        // Resize the mermaid wrapper to match visual (post-scale) dimensions so
+        // the container's overflow:auto scrollbars track the full scaled content.
+        // CSS transform alone does not affect layout, so without this the scrollbar
+        // never appears and the left/right sides are permanently clipped.
+        if (mermaidDiv) {
+          mermaidDiv.style.width  = Math.ceil(nw * appmapScale) + 'px';
+          mermaidDiv.style.height = Math.ceil(nh * appmapScale) + 'px';
+          mermaidDiv.style.overflow = 'visible';
+        }
+
+        // On reset, also scroll back to top-left
+        if (reset) {
+          container.scrollLeft = 0;
+          container.scrollTop  = 0;
         }
       }
       const label = document.getElementById('appmapZoomLevel');
@@ -3720,6 +4879,7 @@ function generateJS(): string {
         if (e.key === '5') navigate('runs');
         if (e.key === '6') navigate('maestro');
         if (e.key === '7') navigate('appmap');
+        if (e.key === '8') navigate('coverage');
         if (e.key === '?' || (e.shiftKey && e.key === '/')) { showShortcutHelp(); return; }
         if (e.key === '/') { e.preventDefault(); openSearch(); }
       });
@@ -3893,6 +5053,105 @@ function generateJS(): string {
         showToast('Notes saved');
       } catch (err) { console.error(err); }
     }
+
+    // ===================== COVERAGE VIEW =====================
+    let coverageCache = null;
+    async function renderCoverage(container) {
+      container.innerHTML = '<div style="padding:40px;color:var(--text-secondary)">Loading coverage data…</div>';
+      try {
+        const res = await fetch('/api/coverage');
+        const data = await res.json();
+        coverageCache = data;
+        renderCoverageContent(container, data);
+      } catch (err) {
+        container.innerHTML = '<div style="padding:40px;color:var(--fail)">Failed to load coverage: ' + err.message + '</div>';
+      }
+    }
+
+    function renderCoverageContent(container, data) {
+      if (data.error) {
+        container.innerHTML = '<div style="padding:40px"><div style="color:var(--fail);margin-bottom:8px">Coverage unavailable</div><div style="color:var(--text-secondary);font-size:13px">' + data.error + '</div><div style="color:var(--text-tertiary);font-size:12px;margin-top:8px">Set <code>codebasePath</code> in projects.json to enable coverage analysis.</div></div>';
+        return;
+      }
+
+      const { calculators, summary } = data;
+      const overallColor = summary.overallPct >= 70 ? 'var(--pass)' : summary.overallPct >= 40 ? 'var(--flaky)' : 'var(--fail)';
+
+      let html = '<div style="padding:24px 32px">';
+
+      // Header + summary
+      html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:28px">';
+      html += '<div>';
+      html += '<div style="font-size:20px;font-weight:600;color:var(--text-primary)">Calculator Coverage</div>';
+      html += '<div style="font-size:13px;color:var(--text-secondary);margin-top:4px">' + summary.totalCalculators + ' calculators · ' + summary.totalFields + ' total fields</div>';
+      html += '</div>';
+      html += '<div style="text-align:right">';
+      html += '<div style="font-size:32px;font-weight:700;color:' + overallColor + '">' + summary.overallPct + '%</div>';
+      html += '<div style="font-size:12px;color:var(--text-secondary)">' + summary.coveredFields + ' / ' + summary.totalFields + ' fields covered</div>';
+      html += '</div>';
+      html += '</div>';
+
+      // Calculator cards grid
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">';
+
+      for (const calc of calculators) {
+        const pct = calc.coveragePct;
+        const barColor = pct >= 70 ? 'var(--pass)' : pct >= 40 ? 'var(--flaky)' : 'var(--fail)';
+        const uncovCount = calc.uncoveredFields.length;
+        const covCount = calc.coveredFields.length;
+
+        html += '<div class="coverage-card" onclick="toggleCoverageDetail(\\'' + calc.id + '\\')" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;cursor:pointer;transition:border-color .15s">';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">';
+        html += '<div style="font-size:14px;font-weight:500;color:var(--text-primary)">' + calc.name + '</div>';
+        html += '<div style="font-size:18px;font-weight:700;color:' + barColor + '">' + pct + '%</div>';
+        html += '</div>';
+
+        // Progress bar
+        html += '<div style="height:6px;background:var(--border);border-radius:3px;margin-bottom:10px;overflow:hidden">';
+        html += '<div style="height:100%;width:' + pct + '%;background:' + barColor + ';border-radius:3px;transition:width .3s"></div>';
+        html += '</div>';
+
+        html += '<div style="display:flex;gap:16px;font-size:12px;color:var(--text-secondary)">';
+        html += '<span style="color:var(--pass)">✓ ' + covCount + ' covered</span>';
+        html += '<span style="color:var(--fail)">✗ ' + uncovCount + ' gaps</span>';
+        html += '<span>' + calc.totalFields + ' total fields</span>';
+        html += '</div>';
+
+        // Collapsible detail
+        html += '<div id="coverage-detail-' + calc.id + '" style="display:none;margin-top:14px;border-top:1px solid var(--border);padding-top:12px">';
+
+        if (covCount > 0) {
+          html += '<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Covered fields</div>';
+          html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px">';
+          for (const f of calc.coveredFields) {
+            html += '<span style="background:rgba(69,224,168,.12);color:var(--pass);border:1px solid rgba(69,224,168,.25);padding:2px 7px;border-radius:10px;font-size:11px">' + f + '</span>';
+          }
+          html += '</div>';
+        }
+
+        if (uncovCount > 0) {
+          html += '<div style="font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Coverage gaps</div>';
+          html += '<div style="display:flex;flex-wrap:wrap;gap:4px">';
+          for (const f of calc.uncoveredFields) {
+            html += '<span style="background:rgba(229,72,77,.1);color:var(--fail);border:1px solid rgba(229,72,77,.2);padding:2px 7px;border-radius:10px;font-size:11px">' + f + '</span>';
+          }
+          html += '</div>';
+        }
+
+        html += '</div>'; // detail
+        html += '</div>'; // card
+      }
+
+      html += '</div>'; // grid
+      html += '</div>'; // padding wrapper
+      container.innerHTML = html;
+    }
+
+    function toggleCoverageDetail(calcId) {
+      const el = document.getElementById('coverage-detail-' + calcId);
+      if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
+    // ===================== END COVERAGE VIEW =====================
 
     let notesDebounce = null;
     function debounceSaveNotes(type, id, notes) {

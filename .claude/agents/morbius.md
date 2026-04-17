@@ -132,15 +132,22 @@ node dist/index.js serve       # Start dashboard to verify
 | `run_flow_files` wrong path | MCP prepends CWD to relative paths | Always use absolute paths |
 | WiFi modal dismisses on `inputText` | Bottom sheet modals are fragile | Tap the input field first, type, hide keyboard, then tap button |
 | "Registration failed" on create account | Email already registered | Use a fresh email or accept as expected error |
+| **STS iOS: `scrollUntilVisible` passes but `tapOn` fails** | Dev toast band (y=733-835) covers element | Overshoot trick: scroll to last option, tap first option — see `morbius-sts-ios` skill |
+| **STS iOS: section fields not found after tab tap** | AsyncStorage async tab restoration overrides tap | Double-tap the section tab with 2s gap — see `morbius-sts-ios` skill |
+| **STS iOS: full-screen "Log N of N" overlay** | DdRumErrorTracking captures `console.error` in dev mode | App code fix required: setTimeout on dispatch + console.error→warn — see `morbius-sts-ios` skill |
+| **STS iOS: `xcuitest IOSDriverTimeoutException`** | Stale XCTest runner | `pkill -f xctest && pkill -f maestro`, retry after 5s |
 
 ---
 
 ## REFERENCE: Active Projects
 
-| Project | App ID | Flows Path | Excel |
-|---------|--------|------------|-------|
-| Micro-Air | `com.microair.connectrv` | `/Users/sdas/Micro-Air/micro-air-testing/Andriod test/flows/` | `Micro Air End to End QA Pla.xlsx` |
-| STS | TBD | TBD | `STS – Standard Feature QA Test Cases.xlsx` |
+| Project | App ID | Flows Path | Status |
+|---------|--------|------------|--------|
+| Micro-Air (Android) | `com.microair.connectrv` | `/Users/sdas/Micro-Air/micro-air-testing/Andriod test/flows/` | ✅ 7 flows passing |
+| STS (iOS) | `com.sts.calculator.dev` | `/Users/sdas/STS/sts-testing/IOS app/flows/` | 🔧 8 flows (03✅ 09✅, 13 in progress, 14-17 written not run) |
+
+**STS iOS device**: `5B14D7C9-1F4F-480D-82CE-86687CB67749` (iPhone 17 Pro simulator, 402×874pt)  
+**STS iOS flows**: See `morbius-sts-ios` skill for battle-tested patterns before writing or debugging any STS flow.
 
 ## REFERENCE: Micro-Air Flows (verified, all passing)
 

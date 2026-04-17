@@ -1,0 +1,82 @@
+appId: com.sts.calculator.dev
+name: "TOS Scroll and Accept"
+---
+# Scroll to bottom of TOS to enable I Agree
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 10%"
+    duration: 500
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 10%"
+    duration: 500
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 10%"
+    duration: 500
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 10%"
+    duration: 500
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 10%"
+    duration: 500
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 10%"
+    duration: 500
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 10%"
+    duration: 500
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 10%"
+    duration: 500
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 10%"
+    duration: 500
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 10%"
+    duration: 500
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn: "I Agree"
+- extendedWaitUntil:
+    visible:
+      id: "FormContentPlaceHolder_LoginEditForm_UserName"
+    timeout: 30000
+- tapOn:
+    id: "FormContentPlaceHolder_LoginEditForm_UserName"
+- inputText: "cthomas"
+- tapOn:
+    id: "FormContentPlaceHolder_LoginEditForm_Password"
+- inputText: "Test1234!"
+- hideKeyboard
+- scroll
+- tapOn:
+    id: "FormContentPlaceHolder_LoginEditForm_LoginButtonStrip_LoginButton"
+- extendedWaitUntil:
+    visible: "Calculators"
+    timeout: 90000

@@ -1,0 +1,52 @@
+appId: com.sts.calculator.dev
+name: "Tricuspid Explore — scroll to find all fields"
+---
+# Scroll down 8 times to reveal all inline content
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 500
+- swipe:
+    start: "50%, 80%"
+    end: "50%, 20%"
+    duration: 600
+- waitForAnimationToEnd:
+    timeout: 1000

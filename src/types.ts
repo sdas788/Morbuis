@@ -65,6 +65,11 @@ export interface Bug {
   jiraKey?: string;              // e.g., "STS-42"
   jiraUrl?: string;              // link to Jira issue
   assignee?: string;             // Jira assignee display name
+  jiraStatus?: string;         // e.g., "In Progress"
+  jiraAssignee?: string;       // display name from Jira
+  jiraPriority?: string;       // "High", "Medium", etc.
+  jiraLastComment?: string;    // body of most recent comment
+  jiraLastSynced?: string;     // ISO timestamp of last sync
 }
 
 export type BugStatus = 'open' | 'investigating' | 'fixed' | 'closed';
@@ -122,6 +127,57 @@ export interface RunSummary {
   failed: number;
   flaky: number;
   notRun: number;
+}
+
+// Run record written to disk after each test run
+export interface MaestroRunRecord {
+  runId: string;
+  testId: string;
+  platform: 'android' | 'ios' | 'unknown';
+  status: 'pass' | 'fail' | 'error';
+  startTime: string;          // ISO
+  endTime: string;            // ISO
+  durationMs: number;
+  exitCode: number;
+  failingStep: string | null; // exact YAML step text that failed
+  errorLine: string | null;   // error message line from stdout
+  screenshotPath: string | null; // relative path: screenshots/{runId}/{testId}.png
+}
+
+// Pointer file {testId}-latest.json — used by Kanban thumbnail
+export interface LatestRunPointer {
+  runId: string;
+  screenshotPath: string | null;
+  status: 'pass' | 'fail' | 'error';
+  failingStep: string | null;
+  errorLine: string | null;
+  timestamp: string;
+}
+
+// Repair run tracking
+export interface RepairRun {
+  repairId: string;
+  testId: string;
+  platform: string;
+  status: 'running' | 'pass' | 'fail' | 'escalated';
+  attempt: number;
+  maxRetries: number;
+  diagnosis: string;
+  diff: string;
+  startedAt: string;
+}
+
+// Suite run tracking
+export interface SuiteRun {
+  suiteId: string;
+  projectId: string;
+  platform: string;
+  status: 'running' | 'complete' | 'error';
+  current: number;
+  total: number;
+  results: Array<{ testId: string; status: string; durationMs: number }>;
+  startedAt: string;
+  endedAt?: string;
 }
 
 // --- Selector Analysis ---
@@ -200,6 +256,8 @@ export interface ProjectConfig {
     jql?: string;                // custom JQL, defaults to "project = X AND type = Bug"
   };
   appMap?: string;               // Mermaid flowchart definition for app navigation
+  codebasePath?: string;         // Absolute path to the app source repo (for coverage analysis)
+  mediaPath?: string;            // Absolute path where run videos/screenshots are stored (outside Morbius repo)
 }
 
 export interface ProjectRegistry {

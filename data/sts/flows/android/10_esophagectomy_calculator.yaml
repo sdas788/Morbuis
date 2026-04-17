@@ -1,0 +1,317 @@
+appId: com.sts.calculator.dev
+name: "10 Esophagectomy — Full E2E Calculation (Android)"
+tags:
+  - android
+  - esophagectomy
+  - calculator
+  - happy-path
+  - flow
+---
+# -----------------------------------------------
+# Esophagectomy Risk Calculator
+# Sections: Planned Surgery → Demographics → Clinical Cancer Staging
+#           → Tumor Location → Induction Treatment → Risk Factors
+# Patient Summary sticky card: tapOn id: btn-patient-summary
+# Back navigation: - back (Android hardware back)
+# NOTE: Android gRPC driver incompatible with API 36 — launchApp not used.
+# Pre-condition: adb -s emulator-5554 shell am force-stop com.sts.calculator.dev
+#                adb -s emulator-5554 shell am start -n com.sts.calculator.dev/com.sts.calculator.MainActivity
+# NOTE: resectionType uses text-label IDs (e.g. radio-resectionType-Transhiatal).
+# NOTE: surgicalPriority-3 = Elective (thoracic convention; cardiac uses -1).
+# NOTE: No dedicated Lab Values tab — creatinine is in Risk Factors > Vascular Disease tab.
+# NOTE: Risk Factors subsection tab ID: tab-vascDiseaseSection (not tab-vascular).
+# NOTE: DOUBLE-TAP tab-plannedSurgery (async restore fix) after 4× swipe on tab bar.
+# NOTE: Subsection tab tap (tab-vascDiseaseSection) is direct tapOn — fixed bar above scroll.
+# -----------------------------------------------
+
+# NOTE: Android gRPC driver incompatible with API 36 — launchApp not used.
+# Pre-condition: adb -s emulator-5554 shell am force-stop com.sts.calculator.dev
+#                adb -s emulator-5554 shell am start -n com.sts.calculator.dev/com.sts.calculator.MainActivity
+- extendedWaitUntil:
+    visible:
+      text: "Esophagectomy Risk Calculator"
+    timeout: 20000
+
+- tapOn: "Esophagectomy Risk Calculator"
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# ===== SECTION 1: Planned Surgery =====
+# After fresh launch, tab-plannedSurgery (leftmost tab) is always in the accessibility tree.
+# Direct tapOn resets scroll to top of Planned Surgery section.
+- tapOn:
+    id: tab-plannedSurgery
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Resection Type: Transhiatal
+- scrollUntilVisible:
+    element:
+      id: "radio-resectionType-Transhiatal"
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: "radio-resectionType-Transhiatal"
+
+# Surgical Approach: Robotic
+# NOTE: surgicalApproach appears ABOVE resectionType in the form layout.
+# After scrollUntilVisible DOWN found resectionType, surgicalApproach is now above viewport.
+- scrollUntilVisible:
+    element:
+      id: "radio-surgicalApproach-Robotic"
+    direction: UP
+    timeout: 8000
+- tapOn:
+    id: "radio-surgicalApproach-Robotic"
+
+# Cardiothoracic Reoperation: No=2
+- scrollUntilVisible:
+    element:
+      id: radio-cardiothoracicReoperation-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-cardiothoracicReoperation-2
+
+# Surgical Priority: Elective=3 (thoracic convention)
+- scrollUntilVisible:
+    element:
+      id: radio-surgicalPriority-3
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-surgicalPriority-3
+
+# ASA Classification: I=1
+- scrollUntilVisible:
+    element:
+      id: radio-asaClassification-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-asaClassification-1
+
+# ECOG Score: 0=Fully active
+- scrollUntilVisible:
+    element:
+      id: radio-ecogScore-0
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-ecogScore-0
+
+# ===== SECTION 2: Demographics =====
+- tapOn:
+    id: tab-demographics
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Sex: Male=1
+- scrollUntilVisible:
+    element:
+      id: radio-sex-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-sex-1
+
+- scrollUntilVisible:
+    element:
+      id: input-age
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-age
+- inputText: "65"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-height
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-height
+- inputText: "170"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-weight
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-weight
+- inputText: "75"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: chip-race-White
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-race-White
+
+# Payor/Insurance: None/self=1
+- scrollUntilVisible:
+    element:
+      id: chip-payor-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-payor-1
+
+# ===== SECTION 3: Clinical Cancer Staging =====
+- tapOn: "Clinical Cancer Staging"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# T Stage: Tis=2
+- scrollUntilVisible:
+    element:
+      id: radio-tStage-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-tStage-2
+
+# Esophageal Nodes: N0=2
+- scrollUntilVisible:
+    element:
+      id: radio-esophagealNodes-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-esophagealNodes-2
+
+# Metastasis: M0=1
+# Overshoot: scroll to -2 (M1) so -1 (M0) lifts above toast band.
+- scrollUntilVisible:
+    element:
+      id: radio-metastasis-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-metastasis-1
+
+# Histology: Squamous Carcinoma=1
+# speed:20 + visibilityPercentage:50 prevent default scroll from triggering toast expansion.
+- scrollUntilVisible:
+    element:
+      id: radio-histology-1
+    direction: DOWN
+    timeout: 10000
+    speed: 20
+    visibilityPercentage: 50
+- tapOn:
+    id: radio-histology-1
+
+# ===== SECTION 4: Tumor Location =====
+- tapOn: "Tumor Location"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Lower Thoracic including EG Junction (30-42 cm)
+- scrollUntilVisible:
+    element:
+      id: checkbox-lowerThoracic
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: checkbox-lowerThoracic
+
+# ===== SECTION 5: Induction Treatment =====
+- tapOn: "Induction Treatment"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Chemotherapy: tapped = Yes
+- scrollUntilVisible:
+    element:
+      id: checkbox-chemotherapy
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: checkbox-chemotherapy
+
+# ===== SECTION 6: Risk Factors =====
+# Scroll main content DOWN to Risk Factors; this makes tab-riskFactors accessible in bar.
+- scrollUntilVisible:
+    element:
+      id: tab-riskFactors
+    direction: DOWN
+    timeout: 15000
+- tapOn:
+    id: tab-riskFactors
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Smoking History: Never smoked (#,1)
+- scrollUntilVisible:
+    element:
+      id: "radio-smokingHistory-Never smoked-#,1"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-smokingHistory-Never smoked-#,1"
+
+# Cardiopulmonary Disease: Hypertension=2
+- scrollUntilVisible:
+    element:
+      id: chip-cardiopulmonaryDisease-2
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: chip-cardiopulmonaryDisease-2
+
+# Creatinine
+- scrollUntilVisible:
+    element:
+      id: input-creatinine
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-creatinine
+- inputText: "1.1"
+- back
+
+# ── Vascular Disease subsection ──
+# Subsection tab is in a fixed HorizontalScrollView above scroll content — direct tapOn.
+- tapOn:
+    id: tab-vascDiseaseSection
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Vascular Disease: Major Aortic or PVD=2
+- scrollUntilVisible:
+    element:
+      id: chip-vascularDisease-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-vascularDisease-2
+
+# ===== VERIFY: Patient Summary =====
+- tapOn:
+    id: btn-patient-summary
+- waitForAnimationToEnd:
+    timeout: 5000
+
+- assertVisible: "Perioperative Outcome"
+- assertVisible: "Operative Mortality"
+- assertVisible: "Morbidity & Mortality"
+
+- scrollUntilVisible:
+    element: "Clinical Summary"
+    direction: DOWN
+    timeout: 5000
+- assertVisible: "Clinical Summary"
+
+- tapOn:
+    id: phosphor-react-native-x-bold
+- waitForAnimationToEnd:
+    timeout: 2000
+- back
+- waitForAnimationToEnd:
+    timeout: 2000

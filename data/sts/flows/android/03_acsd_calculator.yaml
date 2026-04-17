@@ -1,0 +1,435 @@
+appId: com.sts.calculator.dev
+name: "03 ACSD Calculator — Full E2E Calculation (Android)"
+tags:
+  - android
+  - acsd
+  - calculator
+  - happy-path
+  - flow
+---
+# -----------------------------------------------
+# ACSD Operative Risk Calculator — Fill form → Calculate → Verify results
+# Sections: Planned Surgery → Demographics → Laboratory Values
+#           → Preop Medications → Risk Factors (+ subsections)
+# Patient Summary sticky card: tapOn id: btn-patient-summary
+# Back navigation: - back (Android hardware back)
+# NOTE: diabetes uses singleSelectMultiAttribute: radio-diabetes-No-#,2
+# NOTE: endocarditis uses singleSelectMultiAttribute: radio-endocarditis-No-#,2
+# NOTE: cerebrovascularDisease uses 4-column: radio-cerebrovascularDisease-No-#,#,#,2
+# NOTE: Risk Factors has subsections: tab-pulmonary, tab-vascular, tab-cardiacStatus,
+#       tab-coronaryArteryDisease, tab-valveDisease, tab-arrhythmia
+# NOTE: AF "None" fix: scroll to radio-atrialFibrillation-3 first so -1 lifts
+#       above the validation toast overlay (Android toast y~2144-2271 on 1080x2400 screen).
+# FIXED: App restores last-visited tab on relaunch via persistent storage.
+#        Double-tap Planned Surgery tab to ensure it's active after async restore.
+# -----------------------------------------------
+
+# NOTE: Android gRPC driver incompatible with API 36 — launchApp not used.
+# Pre-condition: adb -s emulator-5554 shell am force-stop com.sts.calculator.dev
+#                adb -s emulator-5554 shell am start -n com.sts.calculator.dev/com.sts.calculator.MainActivity
+- extendedWaitUntil:
+    visible:
+      text: "ACSD Operative Risk Calculator"
+    timeout: 20000
+
+- tapOn: "ACSD Operative Risk Calculator"
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# ===== SECTION 1: Planned Surgery =====
+# When Risk Factors is the last-visited tab, tab-plannedSurgery is completely absent
+# from the UiAutomator2 accessibility tree (not just 0px — not emitted at all).
+# scrollUntilVisible is useless when the node doesn't exist in the tree.
+# Instead: 4× swipe LEFT-TO-RIGHT on the main section tab bar (y≈23% of screen height).
+# Each swipe scrolls the HorizontalScrollView one section to the right, revealing
+# left-side tabs. 4 swipes guarantees we reach Planned Surgery from any scroll state.
+# Harmless if already at leftmost (can't scroll further). Then double-tap for AsyncStorage.
+- repeat:
+    times: 4
+    commands:
+      - swipe:
+          start: "20%, 23%"
+          end: "80%, 23%"
+          duration: 300
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: tab-plannedSurgery
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: tab-plannedSurgery
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Planned Surgery: Isolated CABG=1
+- scrollUntilVisible:
+    element:
+      id: radio-plannedSurgery-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-plannedSurgery-1
+
+# Surgery Incidence: First CV surgery=1
+- scrollUntilVisible:
+    element:
+      id: radio-surgeryIncidence-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-surgeryIncidence-1
+
+# Surgical Priority: Elective=1
+- scrollUntilVisible:
+    element:
+      id: radio-surgicalPriority-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-surgicalPriority-1
+
+# ===== SECTION 2: Demographics =====
+- tapOn:
+    id: tab-demographics
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Sex: Male=1
+# direction: DOWN — after swipe-based tab navigation, the form lands mid-Planned Surgery
+# with Demographics below the fold. Scroll DOWN to reach radio-sex-1.
+- scrollUntilVisible:
+    element:
+      id: radio-sex-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-sex-1
+
+- scrollUntilVisible:
+    element:
+      id: input-age
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-age
+- inputText: "65"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-height
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-height
+- inputText: "175"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-weight
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-weight
+- inputText: "80"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: chip-race-White
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-race-White
+
+# ===== SECTION 3: Laboratory Values =====
+- tapOn:
+    id: tab-laboratoryValues
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Lab inputs are already visible after tab navigation (Payor/Insurance field above
+# puts creatinine in viewport at ~y=1593). Direct tapOn — no scrollUntilVisible needed.
+- tapOn:
+    id: input-creatinine
+- inputText: "1.1"
+- back
+
+- tapOn:
+    id: input-hematocrit
+- inputText: "42"
+- back
+
+- tapOn:
+    id: input-wbc
+- inputText: "7.5"
+- back
+
+- scrollUntilVisible:
+    element:
+      id: input-platelets
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-platelets
+- inputText: "250000"
+- back
+
+# ===== SECTION 4: Preoperative Medications =====
+- tapOn:
+    id: tab-preopMeds
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: checkbox-aceInhibitors
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: checkbox-aceInhibitors
+
+# ===== SECTION 5: Risk Factors =====
+- tapOn:
+    id: tab-riskFactors
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Diabetes: No (singleSelectMultiAttribute)
+- scrollUntilVisible:
+    element:
+      id: "radio-diabetes-No-#,2"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-diabetes-No-#,2"
+
+# Endocarditis: No — comes after 9 checkboxes, needs long timeout
+# (Android riskFactors field order: diabetes→9 checkboxes→endocarditis→illicitDrug→alcohol→tobacco)
+- scrollUntilVisible:
+    element:
+      id: "radio-endocarditis-No-#,2"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    id: "radio-endocarditis-No-#,2"
+
+# Illicit Drug Use: Yes=1
+- scrollUntilVisible:
+    element:
+      id: radio-illicitDrugUse-1
+    direction: DOWN
+    timeout: 15000
+- tapOn:
+    id: radio-illicitDrugUse-1
+
+# Alcohol: None=4
+- scrollUntilVisible:
+    element:
+      id: radio-alcoholUse-4
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-alcoholUse-4
+
+# Tobacco: Never smoker=1
+- scrollUntilVisible:
+    element:
+      id: radio-tobaccoUse-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-tobaccoUse-1
+
+# ── Pulmonary subsection ──
+# Subsection tabs are in a fixed HorizontalScrollView above the scroll content — always
+# visible; scrollUntilVisible would scroll the wrong container. Use direct tapOn.
+- tapOn:
+    id: tab-pulmonary
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: radio-chronicLungDisease-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-chronicLungDisease-1
+
+# ── Vascular subsection ──
+- tapOn:
+    id: tab-vascular
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Cerebrovascular Disease: No (4-column singleSelectMultiAttribute)
+- scrollUntilVisible:
+    element:
+      id: "radio-cerebrovascularDisease-No-#,#,#,2"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-cerebrovascularDisease-No-#,#,#,2"
+
+# ── Cardiac Status subsection ──
+- tapOn:
+    id: tab-cardiacStatus
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: "radio-heartFailure-#"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-heartFailure-#"
+
+- scrollUntilVisible:
+    element:
+      id: "radio-nyhaClassification-#"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-nyhaClassification-#"
+
+# Ejection Fraction: 55%
+- scrollUntilVisible:
+    element:
+      id: input-ejectionFaction
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: input-ejectionFaction
+- inputText: "55"
+- back
+
+# ── Coronary Artery Disease subsection ──
+- tapOn:
+    id: tab-coronaryArteryDisease
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Primary Coronary Symptom: No Coronary Symptoms=1
+- scrollUntilVisible:
+    element:
+      id: radio-primarySymptom-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-primarySymptom-1
+
+# Number of Diseased Vessels: None=1
+- scrollUntilVisible:
+    element:
+      id: radio-numDiseasedVessels-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-numDiseasedVessels-1
+
+# ── Valve Disease subsection ──
+# After tapping tab-coronaryArteryDisease, the subsection tab bar may scroll
+# off-screen above. Scroll directly to field IDs with long timeouts.
+- scrollUntilVisible:
+    element:
+      id: radio-aorticRegurgitation-1
+    direction: DOWN
+    timeout: 20000
+- tapOn:
+    id: radio-aorticRegurgitation-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-mitralRegurgitation-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-mitralRegurgitation-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-tricuspidRegurgitation-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-tricuspidRegurgitation-1
+
+# ── Arrhythmia subsection ──
+# AF "None" fix: scroll to radio-atrialFibrillation-3 first so that -1 (None)
+# lifts above the Android validation toast (y~2144-2271 on 1080x2400 screen).
+- scrollUntilVisible:
+    element:
+      id: radio-atrialFibrillation-3
+    direction: DOWN
+    timeout: 15000
+- tapOn:
+    id: radio-atrialFibrillation-1
+
+# atrialFlutter overshoot: scroll position resets after AF tap; 30s to reach -3
+- scrollUntilVisible:
+    element:
+      id: radio-atrialFlutter-3
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    id: radio-atrialFlutter-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-vTachVFib-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-vTachVFib-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-sickSinus-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-sickSinus-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-secondDegreeBlock-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-secondDegreeBlock-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-thirdDegreeBlock-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-thirdDegreeBlock-1
+
+# ===== VERIFY: Patient Summary =====
+- tapOn:
+    id: btn-patient-summary
+- waitForAnimationToEnd:
+    timeout: 5000
+
+- assertVisible: "Perioperative Outcome"
+- assertVisible: "Operative Mortality"
+- assertVisible: "Morbidity & Mortality"
+
+- scrollUntilVisible:
+    element: "Clinical Summary"
+    direction: DOWN
+    timeout: 5000
+- assertVisible: "Clinical Summary"
+
+- tapOn:
+    id: phosphor-react-native-x-bold
+- waitForAnimationToEnd:
+    timeout: 2000
+- back
+- waitForAnimationToEnd:
+    timeout: 2000
