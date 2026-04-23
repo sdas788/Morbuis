@@ -1,0 +1,490 @@
+appId: com.sts.calculator.dev
+name: "14 SAVR After TAVR — Full E2E Calculation (iOS)"
+tags:
+  - ios
+  - savr
+  - calculator
+  - happy-path
+  - flow
+---
+# -----------------------------------------------
+# SAVR After TAVR Risk Calculator
+# Sections: Surgical Details → TAVR Failure Type → Prev. Interventions
+#           → Demographics → Laboratory Values → Risk Factors → Preop Meds
+# Patient Summary sticky card: point "201,178"
+# Back navigation: point "26,90"
+# NOTE: Surgical Details has Yes/No radios for CABG, Aorta Surgery, Other Valve,
+#       Other Cardiac, Other Non-Cardiac procedures.
+#       radio-cabg-3=Yes, radio-aortaSurgery-1=Yes, etc.
+# NOTE: Vascular subsection doesn't have cerebrovascularDisease for SAVR (verify).
+# -----------------------------------------------
+
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- tapOn: "SAVR After TAVR Risk Calculator"
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# ===== SECTION 1: Surgical Details =====
+# DOUBLE-TAP: App async-restores last-visited tab after screen load.
+# First tap + 2s wait lets the async restore fire; second tap locks us on surgicalDetails.
+- tapOn:
+    id: tab-surgicalDetails
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: tab-surgicalDetails
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# CABG: Yes (value 3)
+- scrollUntilVisible:
+    element:
+      id: radio-cabg-3
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-cabg-3
+
+# Aorta Surgery: No (value 2) — scroll slow to avoid toast band overshoot
+- scrollUntilVisible:
+    element:
+      id: radio-aortaSurgery-2
+    direction: DOWN
+    timeout: 8000
+    speed: 20
+    visibilityPercentage: 50
+- tapOn:
+    id: radio-aortaSurgery-2
+
+# Other Valve Surgery: No (value 2)
+# Overshoot trick: scroll to radio-otherCardiacSurgery-1 (next field) so -2 rises above toast band
+- scrollUntilVisible:
+    element:
+      id: radio-otherCardiacSurgery-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-otherValveSurgery-2
+
+# Other Cardiac Surgery: No (value 2)
+# Overshoot trick: scroll to radio-otherNonCardiacSurgery-1 so -2 rises above toast band
+- scrollUntilVisible:
+    element:
+      id: radio-otherNonCardiacSurgery-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-otherCardiacSurgery-2
+
+# Other Non-Cardiac Surgery: No (value 2)
+# Scroll slow with low visibilityPercentage so element doesn't land in toast band
+- scrollUntilVisible:
+    element:
+      id: radio-otherNonCardiacSurgery-2
+    direction: DOWN
+    timeout: 8000
+    speed: 20
+    visibilityPercentage: 50
+- tapOn:
+    id: radio-otherNonCardiacSurgery-2
+
+# ===== SECTION 2: TAVR Failure Type =====
+- tapOn: "TAVR Failure Type"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# SAVR Same Admission as TAVR: No (value 2)
+- scrollUntilVisible:
+    element:
+      id: radio-savrSameAdmissionAsTavr-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-savrSameAdmissionAsTavr-2
+
+# Surgical Priority: Elective
+- scrollUntilVisible:
+    element:
+      id: radio-surgicalPriority-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-surgicalPriority-1
+
+# Surgery Incidence: First CV surgery (value 1)
+- scrollUntilVisible:
+    element:
+      id: radio-surgeryIncidence-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-surgeryIncidence-1
+
+# ===== SECTION 3: Demographics =====
+# NOTE: SAVR tab-demographics is off-screen in the horizontal tab bar (not accessible).
+# Use scrollUntilVisible on text "Male" to scroll the content to the Demographics section.
+
+# Sex: Male=1
+- scrollUntilVisible:
+    element: "Male"
+    direction: DOWN
+    timeout: 30000
+- tapOn:
+    id: radio-sex-1
+
+- scrollUntilVisible:
+    element:
+      id: input-age
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-age
+- inputText: "65"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-height
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-height
+- inputText: "170"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-weight
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-weight
+- inputText: "75"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: chip-race-White
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-race-White
+
+# ===== SECTION 4: Laboratory Values =====
+# NOTE: SAVR tab-laboratoryValues is off-screen. Scroll by input field ID directly.
+
+- scrollUntilVisible:
+    element:
+      id: input-creatinine
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-creatinine
+- inputText: "1.1"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-hematocrit
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-hematocrit
+- inputText: "42"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-wbc
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-wbc
+- inputText: "7.5"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-platelets
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-platelets
+- inputText: "250000"
+- tapOn: Done
+
+# SAVR Lab Values has 7 fields (same as Tricuspid): add albumin, bilirubin, inr
+- scrollUntilVisible:
+    element:
+      id: input-albumin
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-albumin
+- inputText: "4.2"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-bilirubin
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-bilirubin
+- inputText: "1.0"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-inr
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-inr
+- inputText: "1.2"
+- tapOn: Done
+
+# ===== SECTION 5: Risk Factors =====
+# Use ID-based tap — actual label is "Risk Factors/Comorbidities" not "Risk Factors"
+# NOTE: tab-riskFactors becomes accessible in the horizontal tab bar after scrolling ~34%.
+# After filling 7 lab fields the scroll is past that — tab is in the accessibility tree.
+- tapOn:
+    id: tab-riskFactors
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Diabetes: No (singleSelectMultiAttribute)
+- scrollUntilVisible:
+    element:
+      id: "radio-diabetes-No-#,2"
+    direction: DOWN
+    timeout: 10000
+    speed: 20
+    visibilityPercentage: 50
+- tapOn:
+    id: "radio-diabetes-No-#,2"
+
+# Endocarditis: No (singleSelectMultiAttribute)
+- scrollUntilVisible:
+    element:
+      id: "radio-endocarditis-No-#,2"
+    direction: DOWN
+    timeout: 10000
+    speed: 20
+    visibilityPercentage: 50
+- tapOn:
+    id: "radio-endocarditis-No-#,2"
+
+# Illicit Drug Use: Yes=1
+# Overshoot: scroll to -3 (Unknown/last) so -1 lifts above toast band, then tap -1.
+- scrollUntilVisible:
+    element:
+      id: radio-illicitDrugUse-3
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-illicitDrugUse-1
+
+# Alcohol Use: ≤ 1 drink/week=1
+# Overshoot: scroll to -5 (last) so -1 lifts above toast band.
+- scrollUntilVisible:
+    element:
+      id: radio-alcoholUse-5
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-alcoholUse-1
+
+# Tobacco Use: Never smoker=1
+# Overshoot: scroll to -6 (last) so -1 lifts above toast band.
+- scrollUntilVisible:
+    element:
+      id: radio-tobaccoUse-6
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-tobaccoUse-1
+
+# ── Pulmonary subsection ──
+- tapOn:
+    id: tab-pulmonary
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: radio-chronicLungDisease-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-chronicLungDisease-1
+
+# ── Cardiac Status subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-cardiacStatus
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-cardiacStatus
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: "radio-heartFailure-#"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-heartFailure-#"
+
+- scrollUntilVisible:
+    element:
+      id: "radio-nyhaClassification-#"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-nyhaClassification-#"
+
+# Ejection Fraction: 55% (SAVR has this in cardiacStatus)
+- scrollUntilVisible:
+    element:
+      id: input-ejectionFraction
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: input-ejectionFraction
+- inputText: "55"
+- tapOn: Done
+
+# ── Coronary Artery Disease subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-coronaryArteryDisease
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-coronaryArteryDisease
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: radio-primarySymptom-4
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-primarySymptom-4
+
+- scrollUntilVisible:
+    element:
+      id: radio-miWhen-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-miWhen-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-numDiseasedVessels-2
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-numDiseasedVessels-2
+
+# ── Valve Disease (SKIP tab tap — tab-valveDisease is off-screen above at 73% scroll) ──
+# NOTE: SAVR subsection tab bar scrolls off-screen above when main scroll jumps to 73%.
+# Scroll directly to valve disease fields — all Risk Factors content is in one main scroll.
+- scrollUntilVisible:
+    element:
+      id: radio-mitralRegurgitation-1
+    direction: DOWN
+    timeout: 15000
+- tapOn:
+    id: radio-mitralRegurgitation-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-tricuspidRegurgitation-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-tricuspidRegurgitation-1
+
+# ── Arrhythmia (SKIP tab tap — scroll directly to AF field) ──
+# Overshoot trick: scroll to radio-atrialFibrillation-3 so -1 (None) lifts above toast band.
+- scrollUntilVisible:
+    element:
+      id: radio-atrialFibrillation-3
+    direction: DOWN
+    timeout: 15000
+- tapOn:
+    id: radio-atrialFibrillation-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-atrialFlutter-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-atrialFlutter-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-vTachVFib-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-vTachVFib-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-sickSinus-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-sickSinus-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-secondDegreeBlock-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-secondDegreeBlock-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-thirdDegreeBlock-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-thirdDegreeBlock-1
+
+# ===== VERIFY: Patient Summary =====
+- tapOn:
+    id: btn-patient-summary
+- waitForAnimationToEnd:
+    timeout: 5000
+
+- assertVisible: "Perioperative Outcome"
+- assertVisible: "Operative Mortality"
+- assertVisible: "Morbidity & Mortality"
+
+- scrollUntilVisible:
+    element: "Clinical Summary"
+    direction: DOWN
+    timeout: 5000
+- assertVisible: "Clinical Summary"
+
+- tapOn:
+    id: phosphor-react-native-x-bold
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: btn-back
+- waitForAnimationToEnd:
+    timeout: 2000

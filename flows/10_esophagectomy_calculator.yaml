@@ -1,0 +1,305 @@
+appId: com.sts.calculator.dev
+name: "10 Esophagectomy — Full E2E Calculation (iOS)"
+tags:
+  - ios
+  - esophagectomy
+  - calculator
+  - happy-path
+  - flow
+---
+# -----------------------------------------------
+# Esophagectomy Risk Calculator
+# Sections: Planned Surgery → Demographics → Clinical Cancer Staging
+#           → Tumor Location → Induction Treatment → Risk Factors
+# Patient Summary sticky card: point "201,178"
+# Back navigation: point "26,90"
+# NOTE: resectionType uses text-label IDs (e.g. radio-resectionType-Transhiatal).
+# NOTE: surgicalPriority-3 = Elective (thoracic convention; cardiac uses -1).
+# NOTE: No dedicated Lab Values tab — creatinine is in Risk Factors > Vascular Disease tab.
+# NOTE: Risk Factors subsection tab ID: tab-vascDiseaseSection (not tab-vascular).
+# NOTE: chip-payor-1 in Demographics = None/self-pay.
+# NOTE: tab-clinicalCancerStaging is partially off-screen (x=328-519); use text tap.
+# NOTE: DOUBLE-TAP tab-plannedSurgery (async restore fix) before accessing section fields.
+# -----------------------------------------------
+
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- tapOn: "Esophagectomy Risk Calculator"
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# ===== SECTION 1: Planned Surgery =====
+# DOUBLE-TAP: App async-restores last-visited tab after screen load.
+# First tap + 2s wait lets the async restore fire; second tap locks us on plannedSurgery.
+- tapOn:
+    id: tab-plannedSurgery
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: tab-plannedSurgery
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Resection Type: Transhiatal (purely abdominal — single surgicalApproach field)
+- scrollUntilVisible:
+    element:
+      id: "radio-resectionType-Transhiatal"
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: "radio-resectionType-Transhiatal"
+
+# Surgical Approach: Robotic
+- scrollUntilVisible:
+    element:
+      id: "radio-surgicalApproach-Robotic"
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: "radio-surgicalApproach-Robotic"
+
+# Cardiothoracic Reoperation: No=2
+- scrollUntilVisible:
+    element:
+      id: radio-cardiothoracicReoperation-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-cardiothoracicReoperation-2
+
+# Surgical Priority: Elective=3
+- scrollUntilVisible:
+    element:
+      id: radio-surgicalPriority-3
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-surgicalPriority-3
+
+# ASA Classification: I=1
+- scrollUntilVisible:
+    element:
+      id: radio-asaClassification-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-asaClassification-1
+
+# ECOG Score: 0=Fully active
+- scrollUntilVisible:
+    element:
+      id: radio-ecogScore-0
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-ecogScore-0
+
+# ===== SECTION 2: Demographics =====
+- tapOn: "Demographics"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Sex: Male=1
+- tapOn:
+    id: radio-sex-1
+
+- scrollUntilVisible:
+    element:
+      id: input-age
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-age
+- inputText: "65"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-height
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-height
+- inputText: "170"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-weight
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-weight
+- inputText: "75"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: chip-race-White
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-race-White
+
+# Payor/Insurance: None/self=1
+- scrollUntilVisible:
+    element:
+      id: chip-payor-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-payor-1
+
+# ===== SECTION 3: Clinical Cancer Staging =====
+- tapOn: "Clinical Cancer Staging"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# T Stage: Tis=2
+- scrollUntilVisible:
+    element:
+      id: radio-tStage-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-tStage-2
+
+# Esophageal Nodes: N0=2
+- scrollUntilVisible:
+    element:
+      id: radio-esophagealNodes-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-esophagealNodes-2
+
+# Metastasis: M0=1
+- scrollUntilVisible:
+    element:
+      id: radio-metastasis-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-metastasis-1
+
+# Histology: Squamous Carcinoma=1
+- scrollUntilVisible:
+    element:
+      id: radio-histology-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-histology-1
+
+# ===== SECTION 4: Tumor Location =====
+- tapOn: "Tumor Location"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Lower Thoracic including EG Junction (30-42 cm)
+- scrollUntilVisible:
+    element:
+      id: checkbox-lowerThoracic
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: checkbox-lowerThoracic
+
+# ===== SECTION 5: Induction Treatment =====
+- tapOn: "Induction Treatment"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Chemotherapy: tapped = Yes (received chemotherapy)
+- scrollUntilVisible:
+    element:
+      id: checkbox-chemotherapy
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: checkbox-chemotherapy
+
+# ===== SECTION 6: Risk Factors =====
+# Use ID-based tap in case the tab label differs on device
+- tapOn:
+    id: tab-riskFactors
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Smoking History: Never smoked (#,1)
+# NOTE: "Past smoker" ID has parentheses — Maestro may fail to match those.
+#       "Never smoked" has no special chars: radio-smokingHistory-Never smoked-#,1
+- scrollUntilVisible:
+    element:
+      id: "radio-smokingHistory-Never smoked-#,1"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-smokingHistory-Never smoked-#,1"
+
+# Cardiopulmonary Disease: Hypertension=2
+- scrollUntilVisible:
+    element:
+      id: chip-cardiopulmonaryDisease-2
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: chip-cardiopulmonaryDisease-2
+
+# Creatinine
+- scrollUntilVisible:
+    element:
+      id: input-creatinine
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-creatinine
+- inputText: "1.1"
+- tapOn: Done
+
+# ── Vascular Disease subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-vascDiseaseSection
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-vascDiseaseSection
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Vascular Disease: Major Aortic or PVD=2
+- scrollUntilVisible:
+    element:
+      id: chip-vascularDisease-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-vascularDisease-2
+
+# ===== VERIFY: Patient Summary =====
+- tapOn:
+    id: btn-patient-summary
+- waitForAnimationToEnd:
+    timeout: 5000
+
+- assertVisible: "Perioperative Outcome"
+- assertVisible: "Operative Mortality"
+- assertVisible: "Morbidity & Mortality"
+
+- scrollUntilVisible:
+    element: "Clinical Summary"
+    direction: DOWN
+    timeout: 5000
+- assertVisible: "Clinical Summary"
+
+- tapOn:
+    id: phosphor-react-native-x-bold
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: btn-back
+- waitForAnimationToEnd:
+    timeout: 2000

@@ -4,8 +4,8 @@
     {
       "name": "morbius",
       "runtimeExecutable": "/Users/sdas/.nvm/versions/node/v24.13.0/bin/node",
-      "runtimeArgs": ["dist/index.js", "serve"],
-      "port": 3000,
+      "runtimeArgs": ["dist/index.js", "serve", "--port", "9000"],
+      "port": 9000,
       "autoPort": true
     }
   ]

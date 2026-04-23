@@ -1,0 +1,17 @@
+appId: com.sts.calculator.dev
+---
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 3000
+- tapOn: "ACSD Operative Risk Calculator"
+- waitForAnimationToEnd:
+    timeout: 5000
+- tapOn: "Planned Surgery"
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn: "Planned Surgery"
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn: "Demographics"
+- waitForAnimationToEnd:
+    timeout: 3000

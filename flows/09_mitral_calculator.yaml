@@ -1,0 +1,154 @@
+appId: com.sts.calculator.dev
+name: "09 Mitral Regurgitation — Full E2E Calculation (iOS)"
+tags:
+  - ios
+  - mitral
+  - calculator
+  - happy-path
+  - flow
+---
+# -----------------------------------------------
+# Mitral Regurgitation Risk Calculator
+# Sections: Demographics → Risk Factors → Lab Results → Cardiac Details
+# Platelet Ct. is in cells/µL (use 250000, not 250)
+# Patient Summary: tap sticky card via point "201,178"
+# Back navigation: tap point "26,90" (nav header back arrow)
+# AF "None" fix: scroll to AF-3 (Recent AF) first so AF-1 (None) lands
+#   ABOVE the validation toast (toast y=786-854, AF-1 would be at y=817 if
+#   scrolled directly — overlaps toast). Scrolling to AF-3 lifts AF-1 to y≈600.
+# Assertion note: MVr+A-Fib rows show XX% when Pre-Op AF = None — expected.
+# -----------------------------------------------
+
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- tapOn: "Mitral Regurgitation Risk Calculator"
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# ===== SECTION 1: Demographics =====
+- tapOn: Enter Age
+- inputText: "65"
+- tapOn: Done
+
+- tapOn: Enter Height
+- inputText: "170"
+- tapOn: Done
+
+- tapOn: Enter Weight
+- inputText: "75"
+- tapOn: Done
+
+- tapOn: "Male"
+
+- tapOn:
+    id: chip-race-White
+
+# ===== SECTION 2: Risk Factors =====
+- tapOn: "Risk Factors"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# tobaccoUse is the FIRST field visible at top — tap directly, no scroll needed
+- tapOn: "Never Smoker"
+
+- tapOn: "Diabetes - Oral"
+
+- scrollUntilVisible:
+    element:
+      id: radio-chronicLungDisease-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-chronicLungDisease-1
+
+- scrollUntilVisible:
+    element:
+      id: checkbox-hypertension
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: checkbox-hypertension
+
+# ===== SECTION 3: Lab Results =====
+- tapOn: "Lab Results"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- tapOn: Enter Hematocrit
+- inputText: "42"
+- tapOn: Done
+
+- tapOn: Enter WBC Ct.
+- inputText: "7.5"
+- tapOn: Done
+
+# Platelet Ct. is in cells/µL — use 250000 (not 250)
+- tapOn: Enter Platelet Ct.
+- inputText: "250000"
+- tapOn: Done
+
+- tapOn: Enter Creatinine
+- inputText: "1.1"
+- tapOn: Done
+
+- tapOn: Enter Ejection Fraction
+- inputText: "55"
+- tapOn: Done
+
+# ===== SECTION 4: Cardiac Details =====
+- tapOn: "Cardiac Details"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- tapOn: "No Failure"
+
+- scrollUntilVisible:
+    element: "Elective"
+- tapOn: "Elective"
+
+# Pre-Op AF: scroll to radio-atrialFibrillation-3 (Recent AF) so that
+# radio-atrialFibrillation-1 (None) sits above the validation toast overlay
+- scrollUntilVisible:
+    element:
+      id: radio-atrialFibrillation-3
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-atrialFibrillation-1
+
+- scrollUntilVisible:
+    element: "No/Mild insufficiency"
+- tapOn: "No/Mild insufficiency"
+
+- scrollUntilVisible:
+    element: "Leaflet Prolapse without Flail"
+- tapOn: "Leaflet Prolapse without Flail"
+
+# ===== VERIFY: Patient Summary =====
+# Tap the Patient Summary sticky card via coordinates
+- tapOn:
+    id: btn-patient-summary
+- waitForAnimationToEnd:
+    timeout: 5000
+
+- assertVisible: "Perioperative Outcome"
+- assertVisible: "Estimate"
+- assertVisible: "Isolated MV repair (MVr)"
+- assertVisible: "Morbidity & Mortality"
+
+- scrollUntilVisible:
+    element: "Clinical Summary"
+    direction: DOWN
+    timeout: 5000
+- assertVisible: "Clinical Summary"
+
+- tapOn:
+    id: phosphor-react-native-x-bold
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: btn-back
+- waitForAnimationToEnd:
+    timeout: 2000

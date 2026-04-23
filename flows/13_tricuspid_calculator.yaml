@@ -1,0 +1,485 @@
+appId: com.sts.calculator.dev
+name: "13 Isolated Tricuspid Valve Surgery — Full E2E Calculation (iOS)"
+tags:
+  - ios
+  - tricuspid
+  - calculator
+  - happy-path
+  - flow
+---
+# -----------------------------------------------
+# Isolated Tricuspid Valve Surgery Risk Calculator
+# Sections: Planned Surgery → Demographics → Laboratory Values
+#           → Risk Factors → Preoperative Medications
+# Patient Summary sticky card: point "201,178"
+# Back navigation: point "26,90"
+# FIXED: App async-restores last-visited tab after load. Double-tap tab-tricuspidSurgery
+#        (2s gap) ensures second tap fires AFTER AsyncStorage restore completes.
+#        tricuspidSurgery + surgicalPriority visible at scroll=0% — direct tapOn, no scroll.
+# FIXED: tapOn: id: tab-riskFactors (text "Risk Factors" may not resolve).
+# FIXED: endocarditis scrollUntilVisible uses speed: 20, visibilityPercentage: 50
+#        to prevent overshooting when element enters viewport near toast zone (y=786-835).
+# FIXED: Added vascular subsection (peripheralArteryDisease + cerebrovascularDisease).
+# FIXED: Added ejectionFraction (input-ejectionFraction) to cardiacStatus.
+# FIXED: Lab Values has 7 fields: creatinine, hematocrit, wbc, platelets, albumin, bilirubin, inr.
+# FIXED: Arrhythmia AF None fix — scroll to -3 first so -1 lifts above toast band.
+# FIXED: primarySymptom uses No Coronary Symptoms (1) to avoid conditional miWhen field.
+# NOTE: radio-diabetes-No-#,2 and radio-endocarditis-No-#,2 are singleSelectMultiAttribute.
+# NOTE: cerebrovascularDisease is 4-column: radio-cerebrovascularDisease-No-#,#,#,2.
+# NOTE: ejectionFraction uses correct spelling (input-ejectionFraction, not ejectionFaction).
+# -----------------------------------------------
+
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- tapOn: "Isolated Tricuspid Valve Surgery Risk Calculator"
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# ===== SECTION 1: Planned Surgery =====
+# DOUBLE-TAP: App async-restores last-visited tab after screen load.
+# First tap + 2s wait lets the async restore fire (may switch to previousInterventions).
+# Second tap locks us on tricuspidSurgery AFTER restoration completes.
+# Elements tricuspidSurgery, surgicalPriority are visible at scroll=0% — no scrollUntilVisible needed.
+- tapOn:
+    id: tab-tricuspidSurgery
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: tab-tricuspidSurgery
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- tapOn:
+    id: radio-tricuspidSurgery-1
+
+# surgicalPriority: Elective=1 (visible at scroll=0%, direct tap)
+- tapOn:
+    id: radio-surgicalPriority-1
+
+# surgeryIncidence: First CV surgery=1
+- scrollUntilVisible:
+    element:
+      id: radio-surgeryIncidence-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-surgeryIncidence-1
+
+# ===== SECTION 2: Demographics =====
+- tapOn: "Demographics"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Sex: Male=1
+- tapOn:
+    id: radio-sex-1
+
+- scrollUntilVisible:
+    element:
+      id: input-age
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-age
+- inputText: "65"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-height
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-height
+- inputText: "170"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-weight
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-weight
+- inputText: "75"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: chip-race-White
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-race-White
+
+# ===== SECTION 3: Laboratory Values =====
+# Tricuspid has 7 lab fields (vs 4 in ACSD): includes albumin, bilirubin, inr
+- tapOn: "Laboratory Values"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: input-creatinine
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-creatinine
+- inputText: "1.1"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-hematocrit
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-hematocrit
+- inputText: "42"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-wbc
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-wbc
+- inputText: "7.5"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-platelets
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-platelets
+- inputText: "250000"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-albumin
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-albumin
+- inputText: "4.2"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-bilirubin
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-bilirubin
+- inputText: "1.0"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-inr
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-inr
+- inputText: "1.2"
+- tapOn: Done
+
+# ===== SECTION 4: Risk Factors (General tab) =====
+# Use ID-based tap — text "Risk Factors" tab label may differ/truncate on device
+- tapOn:
+    id: tab-riskFactors
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Diabetes: No (singleSelectMultiAttribute — slow scroll to avoid overshoot near toast)
+- scrollUntilVisible:
+    element:
+      id: "radio-diabetes-No-#,2"
+    direction: DOWN
+    timeout: 10000
+    speed: 20
+    visibilityPercentage: 50
+- tapOn:
+    id: "radio-diabetes-No-#,2"
+
+# Endocarditis: No — dev toast at y=786-835 can block element visibility detection.
+# speed: 20 prevents overshooting; visibilityPercentage: 50 allows partial visibility.
+- scrollUntilVisible:
+    element:
+      id: "radio-endocarditis-No-#,2"
+    direction: DOWN
+    timeout: 30000
+    speed: 20
+    visibilityPercentage: 50
+- tapOn:
+    id: "radio-endocarditis-No-#,2"
+
+# Illicit Drug Use: Yes=1
+# Scroll to last option (-3 Unknown) so option -1 lifts above toast band y=733-835, then tap -1.
+- scrollUntilVisible:
+    element:
+      id: radio-illicitDrugUse-3
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-illicitDrugUse-1
+
+# Alcohol Use: ≤ 1 drink/week=1
+# 5 options total; scroll to last (-5 Unknown) to lift -1 above toast band, then tap -1.
+- scrollUntilVisible:
+    element:
+      id: radio-alcoholUse-5
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-alcoholUse-1
+
+# Tobacco Use: Never smoker=1
+# Options: Never=1, Current=2, Former=5, Unknown=6. Scroll to -6 first, then tap -1.
+- scrollUntilVisible:
+    element:
+      id: radio-tobaccoUse-6
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-tobaccoUse-1
+
+# ── Pulmonary subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-pulmonary
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-pulmonary
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: radio-chronicLungDisease-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-chronicLungDisease-1
+
+# ── Vascular subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-vascular
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-vascular
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Peripheral Artery Disease: checkbox-peripheralArteryDisease — leave unchecked (= No)
+
+# Cerebrovascular Disease: No (4-column singleSelectMultiAttribute)
+- scrollUntilVisible:
+    element:
+      id: "radio-cerebrovascularDisease-No-#,#,#,2"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-cerebrovascularDisease-No-#,#,#,2"
+
+# ── Cardiac Status subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-cardiacStatus
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-cardiacStatus
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Heart Failure: None (#)
+- scrollUntilVisible:
+    element:
+      id: "radio-heartFailure-#"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-heartFailure-#"
+
+# NYHA Classification: None (#)
+- scrollUntilVisible:
+    element:
+      id: "radio-nyhaClassification-#"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-nyhaClassification-#"
+
+# Ejection Fraction: 55% (correct spelling: ejectionFraction, not ejectionFaction)
+- scrollUntilVisible:
+    element:
+      id: input-ejectionFraction
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: input-ejectionFraction
+- inputText: "55"
+- tapOn: Done
+
+# ── Coronary Artery Disease subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-coronaryArteryDisease
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-coronaryArteryDisease
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Primary Coronary Symptom: No Coronary Symptoms=1 (avoids conditional miWhen field)
+- scrollUntilVisible:
+    element:
+      id: radio-primarySymptom-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-primarySymptom-1
+
+# Number of Diseased Vessels: None=1
+- scrollUntilVisible:
+    element:
+      id: radio-numDiseasedVessels-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-numDiseasedVessels-1
+
+# ── Valve Disease subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-valveDisease
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-valveDisease
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Aortic Regurgitation: None/Trivial/Trace=1
+- scrollUntilVisible:
+    element:
+      id: radio-aorticRegurgitation-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-aorticRegurgitation-1
+
+# Mitral Regurgitation: None/Trivial/Trace=1
+- scrollUntilVisible:
+    element:
+      id: radio-mitralRegurgitation-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-mitralRegurgitation-1
+
+# Tricuspid Insufficiency: None/Trivial/Trace=1
+- scrollUntilVisible:
+    element:
+      id: radio-tricuspidRegurgitation-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-tricuspidRegurgitation-1
+
+# ── Arrhythmia subsection ──
+# AF "None" fix: scroll to radio-atrialFibrillation-3 first so that -1 (None)
+# lifts above the validation toast overlay (toast y=786-854).
+- scrollUntilVisible:
+    element:
+      id: tab-arrhythmia
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-arrhythmia
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- scrollUntilVisible:
+    element:
+      id: radio-atrialFibrillation-3
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-atrialFibrillation-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-atrialFlutter-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-atrialFlutter-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-vTachVFib-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-vTachVFib-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-sickSinus-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-sickSinus-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-secondDegreeBlock-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-secondDegreeBlock-1
+
+- scrollUntilVisible:
+    element:
+      id: radio-thirdDegreeBlock-1
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: radio-thirdDegreeBlock-1
+
+# ===== VERIFY: Patient Summary =====
+- tapOn:
+    id: btn-patient-summary
+- waitForAnimationToEnd:
+    timeout: 5000
+
+- assertVisible: "Perioperative Outcome"
+- assertVisible: "Operative Mortality"
+- assertVisible: "Morbidity & Mortality"
+
+- scrollUntilVisible:
+    element: "Clinical Summary"
+    direction: DOWN
+    timeout: 5000
+- assertVisible: "Clinical Summary"
+
+- tapOn:
+    id: phosphor-react-native-x-bold
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: btn-back
+- waitForAnimationToEnd:
+    timeout: 2000

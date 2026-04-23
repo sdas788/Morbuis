@@ -1,0 +1,7 @@
+appId: com.sts.calculator.dev
+---
+- scrollUntilVisible:
+    element:
+      id: chip-race-White
+    direction: DOWN
+    timeout: 8000

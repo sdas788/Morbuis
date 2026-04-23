@@ -1,0 +1,356 @@
+appId: com.sts.calculator.dev
+name: "16 Lung Cancer Resection — Full E2E Calculation (iOS)"
+tags:
+  - ios
+  - lung
+  - calculator
+  - happy-path
+  - flow
+---
+# -----------------------------------------------
+# Lung Cancer Resection Risk Calculator
+# Sections: Planned Surgery → Demographics → Clinical Cancer Staging
+#           → Tumor Location → Induction Treatment → Risk Factors
+# Patient Summary sticky card: point "201,178"
+# Back navigation: point "26,90"
+# NOTE: resectionType uses text-label IDs (e.g. radio-resectionType-Lobectomy).
+# NOTE: surgicalPriority-3 = Elective (thoracic convention; cardiac uses -1).
+# NOTE: tumorSize field is customTumorSize type — SKIPPED (requires bespoke UI).
+# NOTE: Tumor Location lobe ID depends on resectionType + lung side:
+#       Lobectomy + Left → radio-lungTumorLobeLeftLungSingle-Upper
+# NOTE: No dedicated Lab Values tab — creatinine is in Risk Factors > Kidney Function tab.
+# NOTE: Risk Factors subsection tabs: tab-pulmonaryFunction, tab-cardiovascularDisease,
+#       tab-vascularDiseaseHistory, tab-kidneyFunction.
+# ARCH: Lung Cancer uses SINGLE-LONG-SCROLL architecture (all sections in one scroll view).
+#       Async restore jumps to last-visited tab at 73%+ scroll, making tab-plannedSurgery
+#       go completely off-screen to the LEFT. Double-tap does NOT work here.
+#       Solution: scroll UP to reach Planned Surgery, then scroll DOWN through all sections.
+#       No section tab navigation needed — scroll directly to each field ID.
+# -----------------------------------------------
+
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 3000
+
+- tapOn: "Lung Cancer Resection Risk Calculator"
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# ===== SECTION 1: Planned Surgery =====
+# Async restore may jump to Risk Factors (73% scroll). Scroll UP to find resectionType.
+- scrollUntilVisible:
+    element:
+      id: "radio-resectionType-Lobectomy"
+    direction: UP
+    timeout: 30000
+- tapOn:
+    id: "radio-resectionType-Lobectomy"
+
+# Surgical Approach: VATS
+- scrollUntilVisible:
+    element:
+      id: "radio-surgicalApproach-VATS"
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: "radio-surgicalApproach-VATS"
+
+# Cardiothoracic Reoperation: No=2
+- scrollUntilVisible:
+    element:
+      id: radio-cardiothoracicReoperation-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-cardiothoracicReoperation-2
+
+# Surgical Priority: Elective=3
+- scrollUntilVisible:
+    element:
+      id: radio-surgicalPriority-3
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-surgicalPriority-3
+
+# ASA Classification: I=1
+# Overshoot: scroll to option-4 (last) so option-1 lifts above dev toast band (y=786-835).
+# Without overshoot, option-1 lands at y=788-840 which is IN the toast band,
+# triggering the React key-prop dev console overlay that blocks further interaction.
+- scrollUntilVisible:
+    element:
+      id: radio-asaClassification-4
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-asaClassification-1
+
+# ECOG Score: 0=Fully active
+# ecogScore has 4 options (0-3). Overshoot to option-3 (last) so option-0 lifts above toast band.
+- scrollUntilVisible:
+    element:
+      id: radio-ecogScore-3
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-ecogScore-0
+
+# ===== SECTION 2: Demographics =====
+# No tab tap needed — scroll directly to Demographics fields (single-long-scroll).
+
+# Sex: Male=1
+- scrollUntilVisible:
+    element:
+      id: radio-sex-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-sex-1
+
+- scrollUntilVisible:
+    element:
+      id: input-age
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-age
+- inputText: "65"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-height
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-height
+- inputText: "170"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: input-weight
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-weight
+- inputText: "75"
+- tapOn: Done
+
+- scrollUntilVisible:
+    element:
+      id: chip-race-White
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-race-White
+
+# Payor/Insurance: None/self=1
+- scrollUntilVisible:
+    element:
+      id: chip-payor-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-payor-1
+
+# ===== SECTION 3: Clinical Cancer Staging =====
+# After filling Demographics, tap Clinical Cancer Staging tab to jump past tumorSize widget.
+# The tumorSize custom widget can intercept scrollUntilVisible; jumping via tab avoids it.
+- tapOn: "Clinical Cancer Staging"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# NOTE: tumorSize (customTumorSize type) skipped — manual fix required
+# Lymph Nodes: N0=1
+- scrollUntilVisible:
+    element:
+      id: radio-lymphNodes-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-lymphNodes-1
+
+# Metastasis: M0=1
+- scrollUntilVisible:
+    element:
+      id: radio-metastasis-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-metastasis-1
+
+# ===== SECTION 4: Tumor Location =====
+- tapOn: "Tumor Location"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Lung: Left
+- scrollUntilVisible:
+    element:
+      id: "radio-lungTumorLocation-Left"
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: "radio-lungTumorLocation-Left"
+
+# Lobe: Upper (Left lung + Lobectomy → LeftLungSingle variant)
+- scrollUntilVisible:
+    element:
+      id: "radio-lungTumorLobeLeftLungSingle-Upper"
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: "radio-lungTumorLobeLeftLungSingle-Upper"
+
+# ===== SECTION 5: Induction Treatment =====
+- tapOn: "Induction Treatment"
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Chemotherapy: tapped = Yes
+- scrollUntilVisible:
+    element:
+      id: checkbox-chemotherapy
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: checkbox-chemotherapy
+
+# ===== SECTION 6: Risk Factors =====
+# Use ID-based tap — tab becomes accessible after scrolling ~34% of way through content.
+- tapOn:
+    id: tab-riskFactors
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Smoking History: Never smoked (#,1)
+# NOTE: "Past smoker" ID has parentheses — Maestro may fail to match those.
+#       "Never smoked" has no special chars: radio-smokingHistory-Never smoked-#,1
+- scrollUntilVisible:
+    element:
+      id: "radio-smokingHistory-Never smoked-#,1"
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: "radio-smokingHistory-Never smoked-#,1"
+
+# ── Pulmonary Function subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-pulmonaryFunction
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-pulmonaryFunction
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# FEV1 Predicted: 80%
+- scrollUntilVisible:
+    element:
+      id: input-fev1Predicted
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-fev1Predicted
+- inputText: "80"
+- tapOn: Done
+
+# DLCO Lowest Predicted: 75%
+- scrollUntilVisible:
+    element:
+      id: input-dlcoLowestPredicted
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-dlcoLowestPredicted
+- inputText: "75"
+- tapOn: Done
+
+# ── Cardiac Disease subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-cardiovascularDisease
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-cardiovascularDisease
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Cardiac Disease: Hypertension=2
+- scrollUntilVisible:
+    element:
+      id: chip-cardiopulmonaryDisease-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-cardiopulmonaryDisease-2
+
+# ── Vascular Disease subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-vascularDiseaseHistory
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-vascularDiseaseHistory
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Vascular Disease: Major Aortic or PVD=2
+- scrollUntilVisible:
+    element:
+      id: chip-vascularDisease-2
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: chip-vascularDisease-2
+
+# ── Kidney Function subsection ──
+- scrollUntilVisible:
+    element:
+      id: tab-kidneyFunction
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-kidneyFunction
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Creatinine: 1.1
+- scrollUntilVisible:
+    element:
+      id: input-creatinine
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-creatinine
+- inputText: "1.1"
+- tapOn: Done
+
+# ===== VERIFY: Patient Summary =====
+- tapOn:
+    id: btn-patient-summary
+- waitForAnimationToEnd:
+    timeout: 5000
+
+- assertVisible: "Perioperative Outcome"
+- assertVisible: "Operative Mortality"
+- assertVisible: "Morbidity & Mortality"
+
+- scrollUntilVisible:
+    element: "Clinical Summary"
+    direction: DOWN
+    timeout: 5000
+- assertVisible: "Clinical Summary"
+
+- tapOn:
+    id: phosphor-react-native-x-bold
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: btn-back
+- waitForAnimationToEnd:
+    timeout: 2000

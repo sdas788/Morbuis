@@ -4,3 +4,5 @@ dist/
 *.log
 data/**/.sync-meta.json
 data/**/screenshots/
+
+Users/

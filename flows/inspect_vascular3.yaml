@@ -1,0 +1,74 @@
+appId: com.sts.calculator.dev
+---
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 3000
+- tapOn: "Isolated Tricuspid Valve Surgery Risk Calculator"
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# Section 1: Planned Surgery
+- tapOn:
+    id: tab-tricuspidSurgery
+- waitForAnimationToEnd:
+    timeout: 2000
+- tapOn:
+    id: tab-tricuspidSurgery
+- waitForAnimationToEnd:
+    timeout: 3000
+- tapOn:
+    id: radio-tricuspidSurgery-1
+- tapOn:
+    id: radio-surgicalPriority-1
+- scrollUntilVisible:
+    element:
+      id: radio-surgeryIncidence-1
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: radio-surgeryIncidence-1
+
+# Section 2: Demographics
+- tapOn: "Demographics"
+- waitForAnimationToEnd:
+    timeout: 3000
+- tapOn:
+    id: radio-sex-1
+- scrollUntilVisible:
+    element:
+      id: input-age
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-age
+- inputText: "65"
+- tapOn: Done
+
+# Section 3: Lab Values
+- tapOn: "Laboratory Values"
+- waitForAnimationToEnd:
+    timeout: 3000
+- scrollUntilVisible:
+    element:
+      id: input-creatinine
+    direction: DOWN
+    timeout: 8000
+- tapOn:
+    id: input-creatinine
+- inputText: "1.1"
+- tapOn: Done
+
+# Section 4: Risk Factors → vascular
+- tapOn:
+    id: tab-riskFactors
+- waitForAnimationToEnd:
+    timeout: 3000
+- scrollUntilVisible:
+    element:
+      id: tab-vascular
+    direction: DOWN
+    timeout: 10000
+- tapOn:
+    id: tab-vascular
+- waitForAnimationToEnd:
+    timeout: 3000

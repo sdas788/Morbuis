@@ -1,10 +1,28 @@
 # Product Brief: Morbius
 
-**Version:** 1.0
-**Updated:** 2026-04-21
+**Version:** 1.1
+**Updated:** 2026-04-23
 **Project:** morbius
 **PM Persona:** pragmatist
-**Sources:** README.md, ROADMAP.md
+**Sources:** README.md, ROADMAP.md, wiki/direction-2026-04.md
+
+---
+
+## Current Direction (2026-04-23)
+
+**Strategic lock: Bet C → B → A.** Morbius is a force-multiplier for RF client delivery first; showcase/content is a harvested byproduct; SaaS only if inbound demand appears. Dedicated 1–2 engineer capacity — not Friday-afternoon work.
+
+**Core Four priorities (leverage order):**
+1. **Self-Healing Selectors** — intercept Maestro failures, propose replacements, human-approve, update YAML
+2. **Ticket→Repro in 3 minutes** — broken Jira sync fix + Bug-Impact AI (related tests on bug open/fix)
+3. **Shadow App** — parallel build comparison (not yet scoped)
+4. **Trust Receipt** — signed release artifact (not yet scoped)
+
+**Explicitly parked:** Nightmare Agent, Anti-Regression Time Machine, Pair Tester, OSS release, chat-first Kanban replacement.
+
+**Gated on RF client quality-sensitivity validation:** Phase 4+ (Legacy-App Coverage Scan). Do not start Bet B/A work until that signal is confirmed.
+
+**Active expansion roadmap:** See [wiki/direction-2026-04.md](wiki/direction-2026-04.md) for the 7-phase sequencing rationale (Phase -1 through Phase 6). New epics E-013 through E-022 track this expansion.
 
 ---
 
@@ -82,3 +100,4 @@ QA teams building mobile apps have no unified, AI-native workspace that connects
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-21 | 1.0 | PM Agent | Created from README.md + ROADMAP.md |
+| 2026-04-23 | 1.1 | Claude | Added Current Direction section — Bet C lock, Core Four, reference to direction-2026-04.md and new epics E-013–E-022 |

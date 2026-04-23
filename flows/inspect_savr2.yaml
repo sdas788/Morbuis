@@ -1,0 +1,7 @@
+appId: com.sts.calculator.dev
+---
+- scrollUntilVisible:
+    element:
+      id: radio-otherValveSurgery-2
+    direction: DOWN
+    timeout: 8000
