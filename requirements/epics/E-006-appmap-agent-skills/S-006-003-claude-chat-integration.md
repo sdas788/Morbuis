@@ -1,4 +1,4 @@
-# Claude Code Chat Integration (WebSocket Bridge)
+# Story: Claude Code Chat Integration (WebSocket Bridge)
 
 **ID:** S-006-003
 **Project:** morbius

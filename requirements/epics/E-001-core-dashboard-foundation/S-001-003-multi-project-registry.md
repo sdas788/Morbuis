@@ -1,4 +1,4 @@
-# Multi-Project Registry + Active Project Switching
+# Story: Multi-Project Registry + Active Project Switching
 
 **ID:** S-001-003
 **Project:** morbius

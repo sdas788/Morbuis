@@ -1,9 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
-import type { TestCase, Bug, Category, TestRun, TestStatus, Priority, ChangelogEntry } from '../types.js';
-
-const BASE_DATA_DIR = path.join(process.cwd(), 'data');
+import type { TestCase, Bug, BugImpact, BugImpactRelatedTest, Category, TestRun, TestStatus, Priority, ChangelogEntry, HealingProposal, HealingState, AppMapNarrative, AppMapPerFlow } from '../types.js';
+import { DATA_DIR as BASE_DATA_DIR } from '../data-dir.js';
 
 export function getDataDir(projectId?: string): string {
   if (projectId) return path.join(BASE_DATA_DIR, projectId);
@@ -39,6 +38,15 @@ export function readTestCase(filePath: string): TestCase {
     changelog: parseChangelogTable(sections['Changelog'] ?? ''),
     created: data.created ?? new Date().toISOString().split('T')[0],
     updated: data.updated ?? new Date().toISOString().split('T')[0],
+    // E-023 / S-023-001: PMAgent backreference round-trip
+    pmagentSource: (data.pmagent_source && typeof data.pmagent_source === 'object') ? {
+      slug: String((data.pmagent_source as Record<string, unknown>).slug ?? ''),
+      storyId: String((data.pmagent_source as Record<string, unknown>).story_id ?? ''),
+      acIndex: Number((data.pmagent_source as Record<string, unknown>).ac_index ?? 0),
+      sourcePath: String((data.pmagent_source as Record<string, unknown>).source_path ?? ''),
+      sourceChecksum: String((data.pmagent_source as Record<string, unknown>).source_checksum ?? ''),
+    } : undefined,
+    pmagentLocked: data.pmagent_locked === true ? true : undefined,
   };
 }
 
@@ -112,6 +120,18 @@ export function writeTestCase(testCase: TestCase, dir?: string): string {
   if (testCase.maestroFlow) {
     frontmatter.maestro_flow = testCase.maestroFlow;
   }
+
+  // E-023 / S-023-001: serialize PMAgent backreference + lock flag when present
+  if (testCase.pmagentSource) {
+    frontmatter.pmagent_source = {
+      slug: testCase.pmagentSource.slug,
+      story_id: testCase.pmagentSource.storyId,
+      ac_index: testCase.pmagentSource.acIndex,
+      source_path: testCase.pmagentSource.sourcePath,
+      source_checksum: testCase.pmagentSource.sourceChecksum,
+    };
+  }
+  if (testCase.pmagentLocked) frontmatter.pmagent_locked = true;
 
   let body = '';
 
@@ -482,6 +502,297 @@ export function loadAllRuns(dataDir?: string): TestRun[] {
     })
     .filter((r): r is TestRun => r !== null)
     .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+}
+
+// --- Bug Impact (E-016 / S-016-001) ---
+// File: data/{projectId}/bugs/{bugId}/impact.md (one per bug, overwrites on regen).
+
+function bugImpactDir(projectDir: string, bugId: string): string {
+  return path.join(projectDir, 'bugs', bugId);
+}
+
+function bugImpactPath(projectDir: string, bugId: string): string {
+  return path.join(bugImpactDir(projectDir, bugId), 'impact.md');
+}
+
+function renderRelatedTestsTable(rows: BugImpactRelatedTest[]): string {
+  if (rows.length === 0) return '_None._\n';
+  let out = '| Test ID | Rationale |\n|---------|-----------|\n';
+  for (const r of rows) {
+    const safe = (r.rationale || '').replace(/\|/g, '\\|').replace(/\n+/g, ' ').trim();
+    out += `| ${r.testId} | ${safe} |\n`;
+  }
+  return out;
+}
+
+function parseRelatedTestsTable(section: string): BugImpactRelatedTest[] {
+  const rows: BugImpactRelatedTest[] = [];
+  if (!section) return rows;
+  const lines = section.split('\n').map(l => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (!line.startsWith('|')) continue;
+    if (/^\|\s*-+\s*\|/.test(line)) continue;          // separator row
+    if (/^\|\s*Test ID\b/i.test(line)) continue;       // header row
+    const cells = line.split('|').slice(1, -1).map(c => c.trim());
+    if (cells.length < 2 || !cells[0]) continue;
+    rows.push({ testId: cells[0], rationale: cells[1] });
+  }
+  return rows;
+}
+
+export function writeBugImpact(impact: BugImpact, projectDir: string): string {
+  const dir = bugImpactDir(projectDir, impact.bugId);
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = bugImpactPath(projectDir, impact.bugId);
+
+  const frontmatter: Record<string, unknown> = {
+    bugId: impact.bugId,
+    generatedAt: impact.generatedAt,
+    bugStatus: impact.bugStatus,
+    riskScore: Math.max(0, Math.min(1, Number(impact.riskScore.toFixed(3)))),
+  };
+  if (impact.generatedBy)     frontmatter.generatedBy = impact.generatedBy;
+  if (impact.modelDurationMs) frontmatter.modelDurationMs = impact.modelDurationMs;
+
+  let body = '';
+  body += '## Related Tests (Rerun)\n\n' + renderRelatedTestsTable(impact.rerun) + '\n';
+  body += '## Related Tests (Manual Verify After Fix)\n\n' + renderRelatedTestsTable(impact.manualVerify) + '\n';
+  body += '## Repro Narrative\n\n' + (impact.reproNarrative?.trim() || '_None recorded._') + '\n';
+
+  fs.writeFileSync(filePath, matter.stringify(body, frontmatter), 'utf-8');
+  return filePath;
+}
+
+export function readBugImpact(bugId: string, projectDir: string): BugImpact | null {
+  const filePath = bugImpactPath(projectDir, bugId);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const { data, content } = matter(raw);
+    const sections = parseSections(content);
+    const score = typeof data.riskScore === 'number' ? data.riskScore : Number(data.riskScore) || 0;
+    return {
+      bugId: String(data.bugId ?? bugId),
+      generatedAt: String(data.generatedAt ?? ''),
+      bugStatus: (data.bugStatus ?? 'open') as Bug['status'],
+      riskScore: Math.max(0, Math.min(1, score)),
+      rerun: parseRelatedTestsTable(sections['Related Tests (Rerun)'] ?? ''),
+      manualVerify: parseRelatedTestsTable(sections['Related Tests (Manual Verify After Fix)'] ?? ''),
+      reproNarrative: (sections['Repro Narrative'] ?? '').trim(),
+      generatedBy: (data.generatedBy ?? undefined) as 'claude' | 'manual' | undefined,
+      modelDurationMs: typeof data.modelDurationMs === 'number' ? data.modelDurationMs : undefined,
+    };
+  } catch (err) {
+    console.error('[bug-impact] failed to read ' + filePath + ':', err);
+    return null;
+  }
+}
+
+// --- AppMap Narrative (E-027) ---
+// File: data/{projectId}/appmap-narrative.md (one per project, overwrites on regen).
+// Mirrors BugImpact: frontmatter + body, persisted via gray-matter, parsed via parseSections.
+
+function appMapNarrativePath(projectDir: string): string {
+  return path.join(projectDir, 'appmap-narrative.md');
+}
+
+function renderPerFlowTable(flows: AppMapPerFlow[]): string {
+  if (!flows.length) return '_None._\n';
+  let out = '| Flow | Why Picked | Last Runs Summary | Agent Time (ms) |\n';
+  out += '|------|------------|-------------------|-----------------|\n';
+  for (const f of flows) {
+    const why = (f.whyPicked || '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+    const summary = (f.lastRunsSummary || '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+    out += `| ${f.flowId} | ${why} | ${summary} | ${f.agentTimeMs || 0} |\n`;
+  }
+  return out;
+}
+
+function parsePerFlowTable(section: string): AppMapPerFlow[] {
+  const out: AppMapPerFlow[] = [];
+  const lines = (section || '').split('\n').map(l => l.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (!line.startsWith('|')) continue;
+    if (/^\|\s*-+\s*\|/.test(line)) continue;             // separator row
+    if (/^\|\s*Flow\s*\|/i.test(line)) continue;          // header row
+    const cells = line.split('|').slice(1, -1).map(c => c.trim().replace(/\\\|/g, '|'));
+    if (cells.length < 4) continue;
+    const ms = parseInt(cells[3], 10);
+    out.push({
+      flowId: cells[0],
+      whyPicked: cells[1],
+      lastRunsSummary: cells[2],
+      agentTimeMs: Number.isFinite(ms) ? ms : 0,
+    });
+  }
+  return out;
+}
+
+export function writeAppMapNarrative(narrative: AppMapNarrative, projectDir: string): string {
+  fs.mkdirSync(projectDir, { recursive: true });
+  const filePath = appMapNarrativePath(projectDir);
+
+  const frontmatter: Record<string, unknown> = {
+    projectId: narrative.projectId,
+    generatedAt: narrative.generatedAt,
+    flowsCovered: narrative.flowsCovered,
+    testCasesTotal: narrative.testCasesTotal,
+    coveragePct: Number(narrative.coveragePct.toFixed(1)),
+    timeOnTask: {
+      generationMs: Math.max(0, Math.round(narrative.timeOnTask.generationMs)),
+      runMs: Math.max(0, Math.round(narrative.timeOnTask.runMs)),
+      totalMs: Math.max(0, Math.round(narrative.timeOnTask.totalMs)),
+    },
+  };
+  if (narrative.generatedBy)     frontmatter.generatedBy = narrative.generatedBy;
+  if (narrative.modelDurationMs) frontmatter.modelDurationMs = narrative.modelDurationMs;
+  if (narrative.qualityFlag)     frontmatter.qualityFlag = narrative.qualityFlag;
+
+  let body = '';
+  body += '## Why these flows\n\n' + (narrative.whyTheseFlows?.trim() || '_None recorded._') + '\n\n';
+  body += '## What the agent learned\n\n' + (narrative.whatTheAgentLearned?.trim() || '_None recorded._') + '\n\n';
+  body += '## Per-Flow Detail\n\n' + renderPerFlowTable(narrative.perFlow) + '\n';
+
+  fs.writeFileSync(filePath, matter.stringify(body, frontmatter), 'utf-8');
+  return filePath;
+}
+
+export function readAppMapNarrative(projectDir: string): AppMapNarrative | null {
+  const filePath = appMapNarrativePath(projectDir);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const { data, content } = matter(raw);
+    const sections = parseSections(content);
+    const time = (data.timeOnTask ?? {}) as Record<string, unknown>;
+    return {
+      projectId: String(data.projectId ?? ''),
+      generatedAt: String(data.generatedAt ?? ''),
+      generatedBy: (data.generatedBy ?? undefined) as 'claude' | 'manual' | undefined,
+      modelDurationMs: typeof data.modelDurationMs === 'number' ? data.modelDurationMs : undefined,
+      flowsCovered: typeof data.flowsCovered === 'number' ? data.flowsCovered : Number(data.flowsCovered) || 0,
+      testCasesTotal: typeof data.testCasesTotal === 'number' ? data.testCasesTotal : Number(data.testCasesTotal) || 0,
+      coveragePct: typeof data.coveragePct === 'number' ? data.coveragePct : Number(data.coveragePct) || 0,
+      qualityFlag: data.qualityFlag === 'generic' ? 'generic' : undefined,
+      whyTheseFlows: (sections['Why these flows'] ?? '').trim(),
+      whatTheAgentLearned: (sections['What the agent learned'] ?? '').trim(),
+      timeOnTask: {
+        generationMs: typeof time.generationMs === 'number' ? time.generationMs : Number(time.generationMs) || 0,
+        runMs: typeof time.runMs === 'number' ? time.runMs : Number(time.runMs) || 0,
+        totalMs: typeof time.totalMs === 'number' ? time.totalMs : Number(time.totalMs) || 0,
+      },
+      perFlow: parsePerFlowTable(sections['Per-Flow Detail'] ?? ''),
+    };
+  } catch (err) {
+    console.error('[appmap-narrative] failed to read ' + filePath + ':', err);
+    return null;
+  }
+}
+
+// --- Healing Proposals (E-017) ---
+// File: data/{projectId}/healing/proposal-{id}.md
+// Hierarchy snapshot: data/{projectId}/healing/proposal-{id}.hierarchy.txt
+
+function healingDir(projectDir: string): string {
+  return path.join(projectDir, 'healing');
+}
+
+function healingPath(projectDir: string, id: string): string {
+  return path.join(healingDir(projectDir), 'proposal-' + id + '.md');
+}
+
+export function writeHealingProposal(p: HealingProposal, projectDir: string): string {
+  fs.mkdirSync(healingDir(projectDir), { recursive: true });
+  const filePath = healingPath(projectDir, p.id);
+
+  const fm: Record<string, unknown> = {
+    id: p.id,
+    runId: p.runId,
+    testId: p.testId,
+    flowPath: p.flowPath,
+    platform: p.platform,
+    failedSelector: p.failedSelector,
+    state: p.state,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+  };
+  if (p.failureLine !== undefined)        fm.failureLine = p.failureLine;
+  if (p.errorLine)                        fm.errorLine = p.errorLine;
+  if (p.proposedSelector !== undefined)   fm.proposedSelector = p.proposedSelector;
+  if (p.modifiedSelector !== undefined)   fm.modifiedSelector = p.modifiedSelector;
+  if (p.confidence !== undefined)         fm.confidence = Number(p.confidence.toFixed(3));
+  if (p.hierarchySnapshotPath)            fm.hierarchySnapshotPath = p.hierarchySnapshotPath;
+  if (p.validationRunId)                  fm.validationRunId = p.validationRunId;
+  if (p.appliedAt)                        fm.appliedAt = p.appliedAt;
+  if (p.errorReason)                      fm.errorReason = p.errorReason;
+
+  let body = '';
+  body += '## Failure Context\n\n';
+  body += '- runId: `' + p.runId + '`\n';
+  body += '- testId: `' + p.testId + '`\n';
+  body += '- platform: ' + p.platform + '\n';
+  body += '- failedSelector: `' + p.failedSelector + '`\n';
+  if (p.errorLine) body += '- errorLine: `' + p.errorLine + '`\n';
+  body += '\n';
+  if (p.rationale) {
+    body += '## Rationale (Claude)\n\n' + p.rationale.trim() + '\n\n';
+  }
+  if (p.rawClaudeResponse && p.state === 'error') {
+    body += '## Raw Claude Response (parse failed)\n\n```\n' + p.rawClaudeResponse.slice(0, 4000) + '\n```\n\n';
+  }
+
+  fs.writeFileSync(filePath, matter.stringify(body, fm), 'utf-8');
+  return filePath;
+}
+
+export function readHealingProposal(id: string, projectDir: string): HealingProposal | null {
+  const filePath = healingPath(projectDir, id);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const { data, content } = matter(raw);
+    const sections = parseSections(content);
+    const rationale = (sections['Rationale (Claude)'] ?? '').trim() || undefined;
+    const rawResp = (sections['Raw Claude Response (parse failed)'] ?? '').trim() || undefined;
+    return {
+      id: String(data.id ?? id),
+      runId: String(data.runId ?? ''),
+      testId: String(data.testId ?? ''),
+      flowPath: String(data.flowPath ?? ''),
+      platform: String(data.platform ?? ''),
+      failedSelector: String(data.failedSelector ?? ''),
+      failureLine: typeof data.failureLine === 'number' ? data.failureLine : undefined,
+      errorLine: typeof data.errorLine === 'string' ? data.errorLine : undefined,
+      state: (data.state ?? 'requested') as HealingState,
+      proposedSelector: typeof data.proposedSelector === 'string' ? data.proposedSelector : undefined,
+      modifiedSelector: typeof data.modifiedSelector === 'string' ? data.modifiedSelector : undefined,
+      confidence: typeof data.confidence === 'number' ? data.confidence : undefined,
+      rationale,
+      hierarchySnapshotPath: typeof data.hierarchySnapshotPath === 'string' ? data.hierarchySnapshotPath : undefined,
+      validationRunId: typeof data.validationRunId === 'string' ? data.validationRunId : undefined,
+      createdAt: String(data.createdAt ?? new Date().toISOString()),
+      updatedAt: String(data.updatedAt ?? new Date().toISOString()),
+      appliedAt: typeof data.appliedAt === 'string' ? data.appliedAt : undefined,
+      errorReason: typeof data.errorReason === 'string' ? data.errorReason : undefined,
+      rawClaudeResponse: rawResp,
+    };
+  } catch (err) {
+    console.error('[healing] failed to read ' + filePath + ':', err);
+    return null;
+  }
+}
+
+export function loadAllHealingProposals(projectDir: string): HealingProposal[] {
+  const dir = healingDir(projectDir);
+  if (!fs.existsSync(dir)) return [];
+  const files = fs.readdirSync(dir).filter(f => f.startsWith('proposal-') && f.endsWith('.md'));
+  const out: HealingProposal[] = [];
+  for (const f of files) {
+    const id = f.replace(/^proposal-/, '').replace(/\.md$/, '');
+    const p = readHealingProposal(id, projectDir);
+    if (p) out.push(p);
+  }
+  return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 // --- Project Registry ---

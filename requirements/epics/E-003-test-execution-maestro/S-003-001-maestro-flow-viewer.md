@@ -1,4 +1,4 @@
-# Maestro Tab — Flow Browser + Human-Readable Step View
+# Story: Maestro Tab — Flow Browser + Human-Readable Step View
 
 **ID:** S-003-001
 **Project:** morbius

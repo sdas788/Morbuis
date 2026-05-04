@@ -1,4 +1,4 @@
-# Poll-Based Pull with Timestamp Conflict Rule
+# Story: Poll-Based Pull with Timestamp Conflict Rule
 
 **ID:** S-019-003
 **Project:** morbius

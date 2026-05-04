@@ -1,12 +1,12 @@
-# Jira Write-Back for Morbius Bug Edits
+# Story: Jira Write-Back for Morbius Bug Edits
 
 **ID:** S-013-003
 **Project:** morbius
 **Epic:** E-013
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P1
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -37,3 +37,4 @@ As a QA lead, I want edits I make to a bug in Morbius to propagate back to Jira 
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: `pushBugWriteback()` orchestrator hooked into `POST /api/bug/update` — fire-and-forget after the local update succeeds, so the UI stays fast. Per-field handlers: `pushBugStatusToJira` (fetches `/transitions`, picks one whose `to.name` matches the Morbius→Jira map, POSTs the transition); `pushBugPriorityToJira` (PUT `fields.priority`); `pushBugCommentToJira` (POST `/comment` in ADF v1, prefixed `[Morbius]`); `pushBugAttachmentToJira` (multipart upload via Node `FormData` + `X-Atlassian-Token: no-check`, deduped by SHA-256 stored in `attachmentHashes` per bugId in `jira-sync-state.json`). All four handlers route through `jiraCall` so they get typed errors + 3-attempt backoff. Retryable failures auto-enqueue in the replay queue (S-013-004). AC1 + AC2 met; AC3 (queueing on failure) is the integration with S-013-004 — verified by code path. |

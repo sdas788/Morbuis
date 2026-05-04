@@ -1,12 +1,12 @@
-# Failure Interception Hook in Maestro Runner
+# Story: Failure Interception Hook in Maestro Runner
 
 **ID:** S-017-001
 **Project:** morbius
 **Epic:** E-017
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P0
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -37,3 +37,4 @@ As a developer working on E-017, I want the Maestro runner to detect selector-mi
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: `HealingProposal` type + `writeHealingProposal/readHealingProposal/loadAllHealingProposals` parsers persisting at `data/{projectId}/healing/proposal-{id}.md`. New `classifySelectorMiss(output, failingStep, errorLine)` matches Maestro signatures `No visible element found / Element not found / Timeout waiting for element` while explicitly excluding `AssertionError` paths. Wired into `/api/test/run`'s child-close handler — on `status==='fail'` we call `enqueueHealingFromFailure()` which writes a proposal in `state: 'requested'` and fires `runHealingPipeline(id)` in the background. Manual trigger also exposed via `POST /api/healing/propose` for testing without a real run. Smoke-tested manual propose: proposal written, pipeline started, advanced to `state: 'error'` cleanly when the snapshot step couldn't reach a device. AC1 + AC2 + AC3 met. |

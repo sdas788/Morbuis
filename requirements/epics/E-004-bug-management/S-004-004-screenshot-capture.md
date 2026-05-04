@@ -1,4 +1,4 @@
-# Failure Screenshot Capture + Inline Preview
+# Story: Failure Screenshot Capture + Inline Preview
 
 **ID:** S-004-004
 **Project:** morbius

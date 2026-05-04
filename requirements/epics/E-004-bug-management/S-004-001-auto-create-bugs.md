@@ -1,4 +1,4 @@
-# Auto-Create Bug Tickets from Maestro Failures
+# Story: Auto-Create Bug Tickets from Maestro Failures
 
 **ID:** S-004-001
 **Project:** morbius

@@ -1,6 +1,30 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import yaml from 'js-yaml';
 import type { MaestroFlow, MaestroStep, SelectorWarning } from '../types.js';
+
+// E-017 / S-017-006: pure string transform — replace the FIRST literal occurrence of `oldSel`
+// with `newSel`. No YAML round-trip → comments, blank lines, indentation are preserved exactly.
+export function replaceSelectorInText(yamlText: string, oldSel: string, newSel: string): { text: string; replaced: boolean } {
+  if (!oldSel) return { text: yamlText, replaced: false };
+  const idx = yamlText.indexOf(oldSel);
+  if (idx < 0) return { text: yamlText, replaced: false };
+  return { text: yamlText.slice(0, idx) + newSel + yamlText.slice(idx + oldSel.length), replaced: true };
+}
+
+// E-017 / S-017-006: file-level wrapper. Reads `flowPath`, replaces first `oldSel` → `newSel`,
+// atomically writes back via tempfile + rename so a crash mid-write can't leave a corrupted YAML.
+// Throws if the selector wasn't found (caller decides how to surface — keep proposal in "approved").
+export function replaceSelector(flowPath: string, oldSel: string, newSel: string): { replaced: boolean } {
+  const original = fs.readFileSync(flowPath, 'utf-8');
+  const out = replaceSelectorInText(original, oldSel, newSel);
+  if (!out.replaced) return { replaced: false };
+  // Atomic write: tempfile in same directory + rename
+  const tmpPath = path.join(path.dirname(flowPath), '.' + path.basename(flowPath) + '.tmp-' + Date.now());
+  fs.writeFileSync(tmpPath, out.text);
+  fs.renameSync(tmpPath, flowPath);
+  return { replaced: true };
+}
 
 export function parseMaestroYaml(filePath: string): MaestroFlow {
   const raw = fs.readFileSync(filePath, 'utf-8');

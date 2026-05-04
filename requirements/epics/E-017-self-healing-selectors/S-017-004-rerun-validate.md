@@ -1,12 +1,12 @@
-# Re-Run with Proposed Selector + Validate
+# Story: Re-Run with Proposed Selector + Validate
 
 **ID:** S-017-004
 **Project:** morbius
 **Epic:** E-017
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P0
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -37,3 +37,4 @@ As the healing pipeline, I want to validate a proposed selector by running the f
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: `validateHealingProposal(proposal, projectDir)` reads the original YAML, calls `replaceSelectorOnce()` to swap `failedSelector` → `proposedSelector` (or `modifiedSelector` if the user has edited it), writes the patched YAML to a temp file in `os.tmpdir()`, and runs `maestro test <tmp>` with a 5min timeout. Validation output is persisted as `data/{projectId}/runs/heal-{id}-{ts}.log` so operators can see what happened. Pipeline transitions: `proposed → validating → (passed: 'validated' / failed: 'invalidated')`. The `/api/healing` list defaults to all states; the UI (S-017-005) filters to `validated` by default with a checkbox to reveal `invalidated` for debugging — meeting AC3's "NOT shown by default" requirement. The temp file is unlinked after the run regardless of outcome. AC1 + AC2 + AC3 met. |

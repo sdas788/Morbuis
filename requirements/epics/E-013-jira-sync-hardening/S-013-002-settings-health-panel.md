@@ -1,12 +1,12 @@
-# Jira Sync Health Panel in Settings
+# Story: Jira Sync Health Panel in Settings
 
 **ID:** S-013-002
 **Project:** morbius
 **Epic:** E-013
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P0
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -37,3 +37,4 @@ As a QA lead, I want a Jira sync health panel in Settings so that I can see at a
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: `GET /api/jira/health` returning `{status, configured, lastSuccessAt, lastErrorAt, queueCount, stuckCount, errorsLast5, remediation}`. New `JiraHealthPanel` React component renders above the Jira credentials form in Settings → Integrations → Jira; auto-polls every 15s, shows status pill (healthy/degraded/broken/unconfigured), last sync times, replay queue count + stuck count, last 5 errors, contextual remediation. Manual "Sync now" button hits `/api/bugs/sync-all` + kicks `/api/jira/queue/replay`. Per-queue-item Retry/Discard buttons. Status mapping: `broken` if last error newer than last success and <5 min old, or any stuck items; `degraded` if queue non-empty or recent transient errors; `healthy` otherwise. AC1, AC2, AC3 all met. |

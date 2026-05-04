@@ -1,4 +1,4 @@
-# Google OAuth Connection in Settings
+# Story: Google OAuth Connection in Settings
 
 **ID:** S-019-001
 **Project:** morbius

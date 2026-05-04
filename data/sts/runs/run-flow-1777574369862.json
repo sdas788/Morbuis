@@ -1,0 +1,15 @@
+{
+  "runId": "run-flow-1777574369862",
+  "testId": "00_login",
+  "platform": "android",
+  "runner": "maestro",
+  "target": "android",
+  "status": "fail",
+  "startTime": "2026-04-30T18:39:29.862Z",
+  "endTime": "2026-04-30T18:39:33.998Z",
+  "durationMs": 2320,
+  "exitCode": 1,
+  "failingStep": null,
+  "errorLine": null,
+  "screenshotPath": "screenshots/run-flow-1777574369862/00_login.png"
+}

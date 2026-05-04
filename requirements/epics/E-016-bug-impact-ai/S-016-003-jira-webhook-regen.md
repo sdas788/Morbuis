@@ -1,12 +1,12 @@
-# Jira Webhook → Regenerate on Status Change
+# Story: Jira Webhook → Regenerate on Status Change
 
 **ID:** S-016-003
 **Project:** morbius
 **Epic:** E-016
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P0
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -37,3 +37,4 @@ As a QA lead, I want impact analyses to regenerate automatically when a bug's Ji
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: new `POST /api/webhook/jira` endpoint accepts Jira's standard payload `{webhookEvent, issue:{key, fields:{status:{name}}}}`, finds the local bug by `jiraKey`, and calls `triggerImpactRegen()` when the status differs from the last-seen value. Polling fallback (AC3): added the same hook inside `syncBugFromJira()` — if a poll detects a status change vs prior `bug.jiraStatus`, regen is triggered through the same path. Both paths share an in-memory dedupe Map keyed by bugId with a 60s window so simultaneous webhook + polling don't double-spend Claude calls. On successful regen, a "impact-regenerated: <reason>" row is appended to the bug's changelog via `updateBugById(_, {}, dir, actor)`. Smoke-tested: webhook returns 200 with `enqueued: BUG-001` for a matching key + status transition, and 200 + `note` for an unknown key (Jira doesn't care about 4xx — keep things 200). AC1 + AC2 + AC3 met. **Production hardening note:** webhook signature validation is intentionally skipped for v1 since RF runs Jira on its own network — add HMAC validation when exposing publicly. |

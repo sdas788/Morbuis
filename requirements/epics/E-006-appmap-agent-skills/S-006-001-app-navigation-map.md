@@ -1,4 +1,4 @@
-# App Navigation Map (Mermaid Flowchart)
+# Story: App Navigation Map (Mermaid Flowchart)
 
 **ID:** S-006-001
 **Project:** morbius

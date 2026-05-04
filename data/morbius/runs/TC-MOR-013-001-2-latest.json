@@ -1,0 +1,8 @@
+{
+  "runId": "web-1777494292733",
+  "screenshotPath": "/tmp/morbius-screenshots/tc-013-001-2-start.png",
+  "status": "error",
+  "failingStep": null,
+  "errorLine": "Test requires a 7-day canary run with >99% sync success rate — time-based acceptance criterion cannot be executed in a single session; /api/runs returns [] (no run history), /api/canary and /api/metrics return 404; Playwright MCP tools unavailable (pencil server still connecting)",
+  "timestamp": "2026-04-29T20:26:12.499Z"
+}

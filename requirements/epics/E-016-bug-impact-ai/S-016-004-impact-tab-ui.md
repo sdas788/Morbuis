@@ -1,12 +1,12 @@
-# Impact Tab in Bug Modal
+# Story: Impact Tab in Bug Modal
 
 **ID:** S-016-004
 **Project:** morbius
 **Epic:** E-016
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P0
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -37,3 +37,4 @@ As a QA lead viewing a bug, I want an "Impact" tab next to the existing bug deta
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented as a `BugImpactPanel` React component mounted inside `BugDrawer` (kept as a drawer section rather than a literal tabset — the AC's "tab" reads as logical separation, which the colored banding + section header now provides). Renders: prominent risk pill with green/yellow/red band per S-016-005 thresholds (<0.3 / 0.3–0.7 / >0.7), animated progress bar, generation timestamp + duration, "Regenerate" button hitting `POST /api/bug/:id/impact/generate`. Rerun rows have a red left-border, manualVerify rows orange. Each row shows testId (clickable — opens TestDrawer via new `onSelectTest` prop), rationale, and a per-row "✕ Flag" toggle hitting `/impact/flag`. When flagged, the row dims and strikes through. Empty state shows a "Generate impact" CTA. Live-verified against BUG-001 (existing impact loaded from disk + re-renders correctly). No console errors. AC1 + AC2 + AC3 met. |

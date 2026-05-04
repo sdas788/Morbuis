@@ -1,4 +1,4 @@
-# Settings Page (Project Config, Devices, Integrations, Appearance)
+# Story: Settings Page (Project Config, Devices, Integrations, Appearance)
 
 **ID:** S-006-004
 **Project:** morbius

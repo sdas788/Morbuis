@@ -25,6 +25,22 @@ export interface TestCase {
   order?: number;                 // manual sort order within category
   changelog?: ChangelogEntry[];   // change history
   updated: string;               // ISO date
+  // E-023 / S-023-001: backreference to source PMAgent story+AC when this test case
+  // was transferred from a PMAgent project. Stamped by the transfer pipeline; absent
+  // for tests imported via Excel or created manually. Drives the results-readback
+  // endpoint (S-023-004) and the drift detector (S-023-005).
+  pmagentSource?: PMAgentSource;
+  // E-023 / C4 mitigation: when true, the drift detector + manual re-transfer skip
+  // overwriting this test case body even if the source AC checksum changed.
+  pmagentLocked?: boolean;
+}
+
+export interface PMAgentSource {
+  slug: string;          // PMAgent project slug, e.g. "morbius"
+  storyId: string;       // e.g. "S-013-001"
+  acIndex: number;       // 0-based AC index within the story (or test plan row index)
+  sourcePath: string;    // absolute path to the source story or T-NNN-NNN-*.md file
+  sourceChecksum: string; // SHA-256 of normalized AC/test-plan-row text
 }
 
 export type TestStatus = 'pass' | 'fail' | 'flaky' | 'not-run' | 'in-progress';
@@ -73,6 +89,97 @@ export interface Bug {
 }
 
 export type BugStatus = 'open' | 'investigating' | 'fixed' | 'closed';
+
+// --- Self-Healing Selectors (E-017) ---
+// Persisted at data/{projectId}/healing/proposal-{id}.md
+// State machine:
+//   requested → snapshotting → proposed → validating → validated | invalidated | error
+//   validated → approved → applied (or rejected at any point)
+
+export type HealingState =
+  | 'requested'      // failure detected, classifier said "selector miss"
+  | 'snapshotting'   // capturing view hierarchy
+  | 'proposed'       // Claude returned a candidate
+  | 'validating'     // re-running flow with the proposal
+  | 'validated'      // re-run passed → ready for review
+  | 'invalidated'    // re-run failed → hidden by default
+  | 'error'          // pipeline crashed (stored for debugging)
+  | 'approved'       // human approved, awaiting YAML write
+  | 'applied'        // YAML updated, proposal closed
+  | 'rejected';      // human rejected
+
+export interface HealingProposal {
+  id: string;
+  runId: string;
+  testId: string;
+  flowPath: string;             // absolute path to YAML
+  platform: 'android' | 'ios' | string;
+  failedSelector: string;
+  failureLine?: number;
+  errorLine?: string;
+  state: HealingState;
+  proposedSelector?: string;
+  modifiedSelector?: string;    // human-edited override (S-017-005 "Modify")
+  confidence?: number;          // 0..1
+  rationale?: string;
+  hierarchySnapshotPath?: string;  // sibling .txt
+  validationRunId?: string;     // run that validated/invalidated the proposal
+  createdAt: string;
+  updatedAt: string;
+  appliedAt?: string;
+  errorReason?: string;         // when state==='error'
+  rawClaudeResponse?: string;   // when parse failed
+}
+
+// --- Bug Impact (E-016) ---
+// Persisted at data/{projectId}/bugs/{bugId}/impact.md (overwrites on regeneration).
+
+export interface BugImpactRelatedTest {
+  testId: string;
+  rationale: string;
+}
+
+export interface BugImpact {
+  bugId: string;
+  generatedAt: string;          // ISO timestamp
+  bugStatus: BugStatus;
+  riskScore: number;            // 0.0–1.0
+  rerun: BugImpactRelatedTest[];        // tests to re-run after the fix lands
+  manualVerify: BugImpactRelatedTest[]; // tests that need human verification (can't be auto-rerun)
+  reproNarrative: string;       // markdown — paste-able into a tester's task list
+  generatedBy?: 'claude' | 'manual';
+  modelDurationMs?: number;     // observability — how long the agent took
+}
+
+// --- AppMap Narrative (E-027) ---
+// Persisted at data/{projectId}/appmap-narrative.md (overwrites on regeneration).
+// Mirrors the BugImpact pattern: frontmatter + body, single file per project.
+
+export interface AppMapPerFlow {
+  flowId: string;            // matches MaestroFlow.id (filename without .yaml)
+  whyPicked: string;         // 1–2 sentences explaining why this specific flow was automated
+  lastRunsSummary: string;   // Claude's read of recent run history; "No runs yet" when empty
+  agentTimeMs: number;       // sum of recent runs durationMs + proportional slice of generation time
+}
+
+export interface AppMapNarrative {
+  projectId: string;
+  generatedAt: string;          // ISO timestamp
+  generatedBy?: 'claude' | 'manual';
+  modelDurationMs?: number;     // duration of the Claude call that produced this narrative
+  flowsCovered: number;
+  testCasesTotal: number;
+  coveragePct: number;          // (flowsCovered / testCasesTotal) * 100, one decimal
+  qualityFlag?: 'generic';      // set if lint detected boilerplate after retry
+  whyTheseFlows: string;        // markdown prose, project-level rationale
+  whatTheAgentLearned: string;  // markdown prose, observations the agent surfaced
+  timeOnTask: {
+    generationMs: number;       // cumulative from agent-activity.json (kind=appmap-narrative)
+    runMs: number;              // cumulative from runs/*.yaml durationMs
+    totalMs: number;            // generationMs + runMs
+  };
+  perFlow: AppMapPerFlow[];
+}
 
 // --- Device ---
 
@@ -129,20 +236,45 @@ export interface RunSummary {
   notRun: number;
 }
 
-// Run record written to disk after each test run
-export interface MaestroRunRecord {
+// E-024 / S-024-002: generic RunRecord shape — handles both Maestro (mobile) and
+// browser-MCP (web) runs. Maestro-specific fields are optional; web-specific fields
+// are optional. The `runner` discriminator tells consumers how to render.
+export interface RunRecord {
   runId: string;
   testId: string;
-  platform: 'android' | 'ios' | 'unknown';
+  runner: 'maestro' | 'web-headless' | 'web-visual' | 'manual';
+  target: 'android' | 'ios' | 'web' | 'unknown';
   status: 'pass' | 'fail' | 'error';
-  startTime: string;          // ISO
-  endTime: string;            // ISO
+  startTime: string;
+  endTime?: string;
   durationMs: number;
-  exitCode: number;
-  failingStep: string | null; // exact YAML step text that failed
-  errorLine: string | null;   // error message line from stdout
-  screenshotPath: string | null; // relative path: screenshots/{runId}/{testId}.png
+  // Maestro-specific (optional)
+  exitCode?: number;
+  failingStep?: string | null;
+  // Shared
+  errorLine?: string | null;
+  screenshotPath?: string | null;   // legacy single-screenshot pointer (Maestro)
+  screenshots?: string[];           // E-024: multi-screenshot list (web runs emit several)
+  // Web-specific
+  targetUrl?: string;
+  domSnapshot?: string;
+  // Friendly failure classification (added 2026-04-30 for better error UX)
+  failureCategory?: string;     // e.g. 'driver-not-running', 'element-not-found'
+  friendlyError?: string;       // short label shown in UI: "Maestro driver not connected to the device"
+  hint?: string;                // remediation suggestion
+  debugFolder?: string;         // Maestro's own debug folder path (logs + step-by-step screenshots)
+  // Configured device slug the run targeted (e.g. 'iphone', 'android-phone'). Undefined
+  // for legacy runs (pre-2026-04-30), web runs, manual runs, or when no booted device
+  // matched the active project's `ProjectConfig.devices`.
+  device?: string;
 }
+
+// Backwards-compat alias — `MaestroRunRecord` is the legacy name, kept so older
+// callers compile. Equivalent to `RunRecord`.
+export type MaestroRunRecord = RunRecord & {
+  // Old code assumed these were always set; widen here to keep compile passing
+  platform?: 'android' | 'ios' | 'unknown';
+};
 
 // Pointer file {testId}-latest.json — used by Kanban thumbnail
 export interface LatestRunPointer {
@@ -152,6 +284,10 @@ export interface LatestRunPointer {
   failingStep: string | null;
   errorLine: string | null;
   timestamp: string;
+  failureCategory?: string;
+  friendlyError?: string;
+  hint?: string;
+  device?: string;
 }
 
 // Repair run tracking
@@ -258,7 +394,20 @@ export interface ProjectConfig {
   appMap?: string;               // Mermaid flowchart definition for app navigation
   codebasePath?: string;         // Absolute path to the app source repo (for coverage analysis)
   mediaPath?: string;            // Absolute path where run videos/screenshots are stored (outside Morbius repo)
+  // E-023 / S-023-001: link this Morbius project to a PMAgent project. Set `pmagentSlug`
+  // to enable the transfer pipeline; `pmagentPath` overrides the default
+  // ${PMAGENT_HOME ?? '/Users/sdas/PMAgent'}/projects/${pmagentSlug} resolution.
+  pmagentSlug?: string;
+  pmagentPath?: string;
+  // E-024 / S-024-001: which runner type drives this project's tests.
+  // Default 'mobile' for backwards compat with all existing Maestro projects.
+  // 'web' switches the TestDrawer Run button + dispatches /api/test/run-web.
+  // 'api' is reserved (no v1 runner yet — falls back to manual status).
+  projectType?: 'mobile' | 'web' | 'api';
+  webUrl?: string;               // base URL for web-app runs, e.g. http://localhost:9000
 }
+
+export type ProjectType = 'mobile' | 'web' | 'api';
 
 export interface ProjectRegistry {
   activeProject: string;         // project id

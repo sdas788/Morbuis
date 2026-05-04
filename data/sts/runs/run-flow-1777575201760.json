@@ -1,0 +1,18 @@
+{
+  "runId": "run-flow-1777575201760",
+  "testId": "00_login",
+  "platform": "android",
+  "runner": "maestro",
+  "target": "android",
+  "status": "fail",
+  "startTime": "2026-04-30T18:53:21.760Z",
+  "endTime": "2026-04-30T18:53:27.126Z",
+  "durationMs": 2319,
+  "exitCode": 1,
+  "failingStep": null,
+  "errorLine": null,
+  "screenshotPath": "screenshots/run-flow-1777575201760/00_login.png",
+  "failureCategory": "driver-not-running",
+  "friendlyError": "Maestro driver not connected to the device",
+  "hint": "The Maestro Android driver is not reachable. Try: (1) `maestro studio` once to bootstrap the driver, (2) restart the emulator, (3) `adb forward tcp:7001 tcp:7001`, or (4) check that the emulator API level is supported by your Maestro version (`maestro --version`)."
+}

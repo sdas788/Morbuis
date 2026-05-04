@@ -1,0 +1,12 @@
+{
+  "runId": "run-flow-1777578431111",
+  "screenshotPath": "screenshots/run-flow-1777578431111/03_acsd_calculator.png",
+  "status": "fail",
+  "failingStep": null,
+  "errorLine": "Assert that \"ACSD Operative Risk Calculator\" is visible... FAILED",
+  "timestamp": "2026-04-30T19:47:37.025Z",
+  "failureCategory": "assertion-failed",
+  "friendlyError": "Assertion failed",
+  "hint": "An `assertVisible` or similar check did not pass. The test ran but the expected condition was not met — likely a real bug in the app, not a flow issue.",
+  "device": "android-phone"
+}

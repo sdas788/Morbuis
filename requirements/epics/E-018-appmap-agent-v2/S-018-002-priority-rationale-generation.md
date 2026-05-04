@@ -1,4 +1,4 @@
-# Priority + Rationale Generation via Claude
+# Story: Priority + Rationale Generation via Claude
 
 **ID:** S-018-002
 **Project:** morbius

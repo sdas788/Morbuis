@@ -1,0 +1,15 @@
+{
+  "runId": "run-flow-1777572757381",
+  "testId": "03_acsd_calculator",
+  "platform": "android",
+  "runner": "maestro",
+  "target": "android",
+  "status": "fail",
+  "startTime": "2026-04-30T18:12:37.382Z",
+  "endTime": "2026-04-30T18:12:41.089Z",
+  "durationMs": 2612,
+  "exitCode": 1,
+  "failingStep": null,
+  "errorLine": null,
+  "screenshotPath": "screenshots/run-flow-1777572757381/03_acsd_calculator.png"
+}

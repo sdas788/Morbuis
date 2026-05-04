@@ -1,12 +1,12 @@
-# Failed-Sync Replay Queue
+# Story: Failed-Sync Replay Queue
 
 **ID:** S-013-004
 **Project:** morbius
 **Epic:** E-013
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P1
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -37,3 +37,4 @@ As a QA lead, I want failed Jira sync operations automatically retried so that t
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: persisted state file `data/{projectId}/jira-sync-state.json` with shape `{lastSuccessAt, lastErrorAt, queue[], attachmentHashes{}}`. `enqueueJiraReplay()` only queues retryable codes (NETWORK / RATE_LIMIT / SERVER); deterministic codes (AUTH / PERMISSION / NOT_FOUND / BAD_REQUEST / CONFIG) are surfaced loudly but not retried. Items dedupe on `(kind, bugId)`. Per-item exponential backoff: 2^attempts seconds, capped at 1h. 60s background ticker (`startJiraReplayTimer` → started from `server.listen` callback) replays eligible items for the active project. Stuck rule: `attempts > 10` AND first failure >24h ago. Manual endpoints: `POST /api/jira/queue/:id/retry` (drops attempt counter, runs immediately, removes on success) and `POST /api/jira/queue/:id/discard` (force-drop). Replay handlers exist for all five queue kinds: `sync-bug`, `writeback-status`, `writeback-priority`, `writeback-comment`, `writeback-attachment`. Surfaces in the Settings health panel (S-013-002). AC1, AC2, AC3 met. |

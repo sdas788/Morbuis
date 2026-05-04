@@ -13,8 +13,7 @@ import yaml from 'js-yaml';
 import matter from 'gray-matter';
 import type { Bug, Priority } from './types.js';
 import { generateFlows } from './generators/maestro-flows.js';
-
-const DATA_DIR = path.join(process.cwd(), 'data');
+import { DATA_DIR } from './data-dir.js';
 
 function nextBugId(bugsDir: string): string {
   if (!fs.existsSync(bugsDir)) return 'BUG-001';
@@ -565,6 +564,124 @@ program
     }
 
     console.log(`\n  Total: ${result.flows.length} flow files${opts.dryRun ? ' (dry run — nothing written)' : ' generated'}\n`);
+  });
+
+// E-023 / S-023-003: Pull QA plan from a PMAgent project into a Morbius project.
+program
+  .command('pmagent-sync <pmagent-slug>')
+  .description('Transfer a PMAgent project’s QA plan into Morbius (pulls test cases from PMAgent’s QA tab)')
+  .option('--target <morbiusProjectId>', 'Existing Morbius project id to update; default: derive from PMAgent brief.md or slug')
+  .option('--path <pmagentPath>', 'Override PMAgent project folder path (otherwise resolves $PMAGENT_HOME/projects/<slug>)')
+  .option('--force', 'Overwrite test cases even when checksums match (preserves history[] regardless)')
+  .option('--dry-run', 'Preview only — show counts but do not write')
+  .action(async (pmagentSlug: string, opts: { target?: string; path?: string; force?: boolean; dryRun?: boolean }) => {
+    const port = process.env.MORBIUS_PORT || '9000';
+    const url = `http://localhost:${port}/api/pmagent/${opts.dryRun ? 'preview' : 'transfer'}`;
+    const body = JSON.stringify({
+      pmagentSlug,
+      pmagentPath: opts.path,
+      morbiusProjectId: opts.target,
+      force: !!opts.force,
+    });
+    console.log(`\n  PMAgent ${opts.dryRun ? 'preview' : 'transfer'}: ${pmagentSlug}`);
+    try {
+      const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      const j = await resp.json() as Record<string, unknown>;
+      if (!resp.ok || j.ok !== true) {
+        console.error(`  ✗ ${j.error ?? 'HTTP ' + resp.status}`);
+        process.exit(1);
+      }
+      if (opts.dryRun) {
+        const cats = (j.categories as Array<{ name: string; count: number }>) ?? [];
+        console.log(`  ✓ ${j.totalTestCases ?? 0} test cases across ${cats.length} categories`);
+        for (const c of cats) console.log(`    · ${c.name}: ${c.count}`);
+        if (Array.isArray(j.skippedSheets) && j.skippedSheets.length > 0) {
+          console.log(`  ○ ${(j.skippedSheets as string[]).join(', ')} skipped`);
+        }
+      } else {
+        console.log(`  ✓ project: ${j.morbiusProjectId}`);
+        console.log(`  ✓ ${j.testCasesCreated} created, ${j.testCasesUpdated} updated, ${j.testCasesUntouched} untouched${j.testCasesSkippedLocked ? ', ' + j.testCasesSkippedLocked + ' locked-skipped' : ''}`);
+        console.log(`  ✓ ${j.durationMs}ms`);
+      }
+      console.log('');
+    } catch (err) {
+      console.error(`  ✗ ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`  Hint: is the Morbius server running on port ${port}? Try 'morbius serve --port ${port}' in another terminal.`);
+      process.exit(1);
+    }
+  });
+
+// E-023 (extension): publish Morbius test cases back as PMAgent T-*.md test plans
+// so they appear in PMAgent's QA tab.
+program
+  .command('pmagent-publish <pmagent-slug>')
+  .description('Generate T-NNN-NNN-*.md test plans in PMAgent epic folders from Morbius test cases')
+  .option('--target <morbiusProjectId>', 'Morbius project id (default: linked project for this pmagent slug)')
+  .option('--path <pmagentPath>', 'Override PMAgent project folder path')
+  .option('--force', 'Rewrite test plan files even when content is unchanged')
+  .action(async (pmagentSlug: string, opts: { target?: string; path?: string; force?: boolean }) => {
+    const port = process.env.MORBIUS_PORT || '9000';
+    const url = `http://localhost:${port}/api/pmagent/publish-test-plans`;
+    const body = JSON.stringify({
+      pmagentSlug,
+      pmagentPath: opts.path,
+      morbiusProjectId: opts.target,
+      force: !!opts.force,
+    });
+    console.log(`\n  PMAgent publish-back: ${pmagentSlug}`);
+    try {
+      const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      const j = await resp.json() as Record<string, unknown>;
+      if (!resp.ok || j.ok !== true) {
+        console.error(`  ✗ ${j.error ?? 'HTTP ' + resp.status}`);
+        process.exit(1);
+      }
+      console.log(`  ✓ ${j.testPlansWritten} test plan file(s) written, ${j.testPlansSkipped} unchanged`);
+      console.log(`  ✓ from ${j.sourceTestCases} Morbius test cases (project: ${j.morbiusProjectId})`);
+      const per = (j.perStory as Array<Record<string, unknown>>) ?? [];
+      const created = per.filter(p => p.status === 'created');
+      const updated = per.filter(p => p.status === 'updated');
+      const unchanged = per.filter(p => p.status === 'unchanged');
+      if (created.length > 0) console.log(`    · ${created.length} created`);
+      if (updated.length > 0) console.log(`    · ${updated.length} updated`);
+      if (unchanged.length > 0) console.log(`    · ${unchanged.length} unchanged`);
+      console.log('');
+    } catch (err) {
+      console.error(`  ✗ ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`  Hint: is the Morbius server running on port ${port}?`);
+      process.exit(1);
+    }
+  });
+
+// E-024 / S-024-004: run a web test via the agent-orchestrated browser-MCP runner
+program
+  .command('run-web <testId>')
+  .description('Run a web test case via Claude + Playwright MCP (E-024); --visual switches to Claude in Chrome')
+  .option('--visual', 'Use the visual backend (Claude in Chrome) instead of headless Playwright')
+  .action(async (testId: string, opts: { visual?: boolean }) => {
+    const port = process.env.MORBIUS_PORT || '9000';
+    const url = `http://localhost:${port}/api/test/run-web`;
+    const mode = opts.visual ? 'visual' : 'headless';
+    console.log(`\n  Running web test: ${testId} (${mode})`);
+    try {
+      const resp = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testId, mode }),
+      });
+      const j = await resp.json() as Record<string, unknown>;
+      if (!resp.ok || j.ok === false) {
+        console.error(`  ✗ ${j.error ?? j.errorLine ?? 'HTTP ' + resp.status}`);
+        process.exit(1);
+      }
+      console.log(`  ✓ ${j.status} · ${j.screenshotCount ?? 0} screenshots · ${Math.round((j.durationMs as number ?? 0)/1000)}s`);
+      console.log(`  ✓ runId: ${j.runId} · target: ${j.targetUrl}`);
+      if (j.errorLine) console.log(`  ! ${j.errorLine}`);
+      console.log('');
+    } catch (err) {
+      console.error(`  ✗ ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`  Hint: is the Morbius server running on port ${port}?`);
+      process.exit(1);
+    }
   });
 
 program.parse();

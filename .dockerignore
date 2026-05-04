@@ -1,0 +1,36 @@
+# Build artifacts — re-built inside the container
+dist
+node_modules
+
+# Local data — volume-mounted at /data in v2.0, never baked into the image
+data
+.maestro-output
+
+# VCS / editor / OS noise
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+
+# Local secrets / env (never copy into image; use Fly secrets)
+.env
+.env.*
+*.local
+
+# Tooling caches
+.npm
+.cache
+.turbo
+*.log
+
+# Project-internal docs / planning that don't belong in the runtime image
+requirements
+wiki
+docs
+*.md
+!README.md
+
+# Claude Code / preview server scaffolding
+.claude

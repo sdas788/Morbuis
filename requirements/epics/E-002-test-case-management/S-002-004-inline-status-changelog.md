@@ -1,4 +1,4 @@
-# Inline Status Update + Per-File Changelog
+# Story: Inline Status Update + Per-File Changelog
 
 **ID:** S-002-004
 **Project:** morbius

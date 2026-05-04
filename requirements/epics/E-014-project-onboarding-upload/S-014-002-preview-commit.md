@@ -1,12 +1,12 @@
-# Post-Upload Preview + Commit Flow
+# Story: Post-Upload Preview + Commit Flow
 
 **ID:** S-014-002
 **Project:** morbius
 **Epic:** E-014
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P0
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -37,3 +37,4 @@ As a QA lead, I want to preview the parsed test cases before committing the impo
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: split `src/parsers/excel.ts` into `parseExcelFile(path)` (in-memory only — returns `ParsedExcel` with full categories + test cases + sync checksums + skipped sheets) and `writeParsedExcel(parsed, dir)` (disk write). `importExcel()` now composes the two — backwards-compatible. New `POST /api/excel/preview` endpoint runs only the parse half and returns `{ok, categories[], totalTestCases, skippedSheets, sample[]}` (sample = up to 5 test rows across the first few categories with id/title/category/scenario/status). UI: modal phases are `input → parsing → preview → committing`; preview screen shows category list with counts, sample test rows with status dots, and skipped sheet names. Cancel at any phase is a no-op (no project, no files written). AC1 + AC2 + AC3 met. |

@@ -1,5 +1,5 @@
 {
-  "activeProject": "sts",
+  "activeProject": "micro-air",
   "projects": [
     {
       "id": "micro-air",
@@ -109,8 +109,8 @@
         "source": "/Users/sdas/Downloads/STS – Standard Feature QA Test Cases.xlsx"
       },
       "maestro": {
-        "androidPath": "/Users/sdas/Morbius/data/sts/flows",
-        "iosPath": "/Users/sdas/STS/sts-testing/IOS app"
+        "androidPath": "/Users/sdas/STS/sts-testing/android-test",
+        "iosPath": "/Users/sdas/STS/sts-testing/ios-test"
       },
       "env": {
         "TEST_USERNAME": "cthomas",
@@ -135,6 +135,36 @@
         "Valid test credentials (see Test Users sheet in Excel)",
         "Network access to STS web portal for account creation flow"
       ]
+    },
+    {
+      "id": "morbius",
+      "name": "morbius",
+      "created": "2026-04-28",
+      "devices": [
+        {
+          "id": "ipad",
+          "name": "iPad",
+          "platform": "ios"
+        },
+        {
+          "id": "iphone",
+          "name": "iPhone",
+          "platform": "ios"
+        },
+        {
+          "id": "android-tab",
+          "name": "Android Tablet",
+          "platform": "android"
+        },
+        {
+          "id": "android-phone",
+          "name": "Android Phone",
+          "platform": "android"
+        }
+      ],
+      "pmagentSlug": "morbius",
+      "projectType": "web",
+      "webUrl": "http://localhost:9000"
     }
   ]
 }

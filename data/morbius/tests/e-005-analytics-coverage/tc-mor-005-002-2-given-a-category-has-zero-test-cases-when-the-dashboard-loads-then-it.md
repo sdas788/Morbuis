@@ -1,0 +1,31 @@
+---
+id: TC-MOR-005-002-2
+title: Given a category has zero test cases When the Dashboard loads Then it
+category: e-005-analytics-coverage
+scenario: Negative
+status: not-run
+priority: P2
+platforms:
+  - android
+  - ios
+tags:
+  - s-005-002
+  - e-005
+created: '2026-04-28'
+updated: '2026-04-28'
+pmagent_source:
+  slug: morbius
+  story_id: S-005-002
+  ac_index: 1
+  source_path: >-
+    /Users/sdas/Morbius/requirements/epics/E-005-analytics-coverage/S-005-002-coverage-gaps.md
+  source_checksum: 1eadfab3863f3007
+---
+## Steps
+1. **Setup:** a category has zero test cases
+2. **Action:** the Dashboard loads
+3. **Assert:** it appears in Coverage Gaps as "empty category"
+
+## Expected Result
+Given a category has zero test cases When the Dashboard loads Then it appears in Coverage Gaps as "empty category"
+

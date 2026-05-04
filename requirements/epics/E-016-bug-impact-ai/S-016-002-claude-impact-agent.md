@@ -1,12 +1,12 @@
-# Claude Agent for Impact Generation
+# Story: Claude Agent for Impact Generation
 
 **ID:** S-016-002
 **Project:** morbius
 **Epic:** E-016
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P0
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -37,3 +37,4 @@ As a QA lead, I want an AI agent that takes a bug + its context and produces a s
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: server-side `askClaude(prompt, opts)` + `extractJson()` foundation (spawns `claude --print --model claude-sonnet-4-6`, captures stdout, supports timeout — reuses the same bridge as S-006-003 per Guardrail #5). New `generateBugImpact(bugId, projectDir)` function: `buildImpactContext` loads bug + linked test + same-category sibling tests (cap 20) + last 5 runs of the linked test + truncated Maestro YAML; `buildImpactPrompt` composes a strict-JSON instruction with riskScore band guidance; response goes through `extractJson` (handles ```json fences) + `validateRawImpact` (numeric range, array shape, warns on unknown testIds). On any failure (context, Claude timeout, JSON parse, validation) the previous `impact.md` is preserved untouched and the error joins a 10-slot ring buffer (loud `console.error`). New endpoints: `POST /api/bug/:id/impact/generate` and `GET /api/bug/:id/impact`. Live-tested against BUG-001 — Claude returned riskScore 0.72 + 4 rerun + 2 manualVerify + 7-step repro narrative in 9.7s; file written to `data/micro-air/bugs/BUG-001/impact.md` and round-tripped via GET. AC1, AC2, AC3 met (graceful degradation when no linked test is included in the prompt). |

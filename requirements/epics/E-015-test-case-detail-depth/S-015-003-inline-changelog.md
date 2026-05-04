@@ -1,12 +1,12 @@
-# Inline Changelog in Detail View
+# Story: Inline Changelog in Detail View
 
 **ID:** S-015-003
 **Project:** morbius
 **Epic:** E-015
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P1
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -33,3 +33,4 @@ As a QA lead, I want to see the changelog for a test case inline in the detail v
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: new `ChangelogAccordion` React component used inside `TestDrawer`. Default state collapsed; clicking the section title (with rotating chevron) toggles open. Reads `detail.changelog` (already populated by `parseChangelogTable` in `src/parsers/markdown.ts` and returned by `/api/test/:id`). Renders the **newest 20 entries** in newest-first order, capped at 20 — at that scale a flat list is the cheapest fix for the "performance" AC. Each row shows: relative timestamp, field name, oldValue → newValue (oldValue strikethrough, "∅" placeholder when blank), actor. When the changelog has >20 entries a "Showing newest 20 of N entries" hint appears at the top of the expanded list. Verified live against TC-1.01 which has 6 changelog entries. AC1 + AC2 met. |

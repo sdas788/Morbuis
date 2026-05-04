@@ -1,0 +1,17 @@
+{
+  "runId": "web-1777494136209",
+  "testId": "TC-MOR-013-001-1",
+  "runner": "web-headless",
+  "target": "web",
+  "status": "pass",
+  "startTime": "2026-04-29T20:22:16.209Z",
+  "endTime": "2026-04-29T20:24:37.501Z",
+  "durationMs": 141287,
+  "errorLine": null,
+  "screenshots": [
+    "/tmp/tc-mor-013-001-1-start.png",
+    "/tmp/tc-mor-013-001-1-jira-errors.png"
+  ],
+  "targetUrl": "http://localhost:9000",
+  "domSnapshot": "Server at http://localhost:9000 responds 200 with Morbius QA Dashboard HTML. GET /api/jira/errors returns {\"errors\":[]} (HTTP 200). Source verification: JiraErrorCode type defined as 'AUTH'|'PERMISSION'|'NOT_FOUND'|'CONFLICT'|'RATE_LIMIT'|'SERVER'|'NETWORK'|'BAD_REQUEST' at server.ts:1763; JIRA_ERROR_BUFFER_SIZE=20 at line 1778; ring buffer endpoint /api/jira/errors at line 1511; recordJiraError() logs structured entries with ts/code/method/url/status/attempt fields. All required failure modes covered: auth→AUTH, write conflict→CONFLICT, rate limit→RATE_LIMIT, webhook drift→webhook receiver at /api/webhook/jira with CONFLICT classification. AC-001 satisfied: structured logging instrumented, distinct error codes per failure mode, last 20 errors readable via API endpoint."
+}

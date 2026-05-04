@@ -1,4 +1,4 @@
-# Coverage Gap Report Generator
+# Story: Coverage Gap Report Generator
 
 **ID:** S-020-003
 **Project:** morbius

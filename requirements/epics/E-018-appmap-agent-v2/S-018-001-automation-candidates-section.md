@@ -1,4 +1,4 @@
-# Automation Candidates Section in AppMap View
+# Story: Automation Candidates Section in AppMap View
 
 **ID:** S-018-001
 **Project:** morbius

@@ -1,12 +1,12 @@
-# Audit & Fix Jira Sync Failure Modes
+# Story: Audit & Fix Jira Sync Failure Modes
 
 **ID:** S-013-001
 **Project:** morbius
 **Epic:** E-013
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P0
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -41,3 +41,4 @@ As a QA lead, I want the root cause of Jira sync failures identified and fixed s
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: `jiraCall` wrapper (Basic auth, typed error codes, 3-attempt exponential backoff for retryable codes only); ring buffer + `GET /api/jira/errors` endpoint; `sync-all` no longer fire-and-forget (awaits each bug, returns per-bug results); `sync-jira` and `create-jira` refactored to use the wrapper. Root-cause fix: `/sync-jira` was using Bearer auth — Atlassian Cloud REST v3 requires Basic auth with email + API token. Updated `arch.md` Endpoints table. AC1 + AC3 met; AC2 (7-day canary) requires real Jira config + observation window; AC4 (no manual buttons) is S-013-002 territory. |

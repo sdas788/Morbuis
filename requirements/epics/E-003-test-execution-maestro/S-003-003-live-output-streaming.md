@@ -1,4 +1,4 @@
-# Live Output Streaming via WebSocket
+# Story: Live Output Streaming via WebSocket
 
 **ID:** S-003-003
 **Project:** morbius

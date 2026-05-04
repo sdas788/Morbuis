@@ -1,4 +1,4 @@
-# Write Decision Doc + Gate Criteria
+# Story: Write Decision Doc + Gate Criteria
 
 **ID:** S-022-001
 **Project:** morbius

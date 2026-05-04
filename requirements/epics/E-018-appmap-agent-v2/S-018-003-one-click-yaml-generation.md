@@ -1,4 +1,4 @@
-# One-Click YAML Generation from Candidate
+# Story: One-Click YAML Generation from Candidate
 
 **ID:** S-018-003
 **Project:** morbius

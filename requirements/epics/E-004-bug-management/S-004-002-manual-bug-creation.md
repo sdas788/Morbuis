@@ -1,4 +1,4 @@
-# Manual Bug Creation UI
+# Story: Manual Bug Creation UI
 
 **ID:** S-004-002
 **Project:** morbius

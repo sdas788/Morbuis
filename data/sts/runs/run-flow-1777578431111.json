@@ -1,0 +1,19 @@
+{
+  "runId": "run-flow-1777578431111",
+  "testId": "03_acsd_calculator",
+  "platform": "android",
+  "runner": "maestro",
+  "target": "android",
+  "status": "fail",
+  "startTime": "2026-04-30T19:47:11.111Z",
+  "endTime": "2026-04-30T19:47:37.025Z",
+  "durationMs": 24179,
+  "exitCode": 1,
+  "failingStep": null,
+  "errorLine": "Assert that \"ACSD Operative Risk Calculator\" is visible... FAILED",
+  "screenshotPath": "screenshots/run-flow-1777578431111/03_acsd_calculator.png",
+  "failureCategory": "assertion-failed",
+  "friendlyError": "Assertion failed",
+  "hint": "An `assertVisible` or similar check did not pass. The test ran but the expected condition was not met — likely a real bug in the app, not a flow issue.",
+  "device": "android-phone"
+}

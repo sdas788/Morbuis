@@ -1,4 +1,4 @@
-# Bug Kanban Board + Status Workflow
+# Story: Bug Kanban Board + Status Workflow
 
 **ID:** S-004-003
 **Project:** morbius

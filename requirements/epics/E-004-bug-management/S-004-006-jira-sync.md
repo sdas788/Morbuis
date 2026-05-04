@@ -1,4 +1,4 @@
-# Jira Sync — Pull Bugs, Sync Status, Create Issues
+# Story: Jira Sync — Pull Bugs, Sync Status, Create Issues
 
 **ID:** S-004-006
 **Project:** morbius

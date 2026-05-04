@@ -4,8 +4,8 @@ import crypto from 'node:crypto';
 import XLSX from 'xlsx';
 import type { TestCase, Category, SyncMeta, TestStatus, Priority } from '../types.js';
 import { writeTestCase, writeCategory } from './markdown.js';
+import { DATA_DIR } from '../data-dir.js';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
 const SYNC_META_PATH = path.join(DATA_DIR, '.sync-meta.json');
 
 // Sheets to skip (metadata/summary sheets, not test sheets)
@@ -40,99 +40,87 @@ export interface ImportResult {
   skippedSheets: string[];
 }
 
-export function importExcel(xlsxPath: string, targetDir?: string): ImportResult {
+// S-014-002: Preview shape — same parsing as importExcel but returns in-memory data
+// (no disk writes), so the UI can show the user what's about to land before commit.
+export interface ParsedCategory {
+  id: string;             // slug
+  name: string;
+  sheet: string;
+  order: number;
+  testCases: TestCase[];
+}
+
+export interface ParsedExcel {
+  categories: ParsedCategory[];
+  totalTestCases: number;
+  skippedSheets: string[];
+  excelMtime: string;
+  checksums: Record<string, string>;
+}
+
+export function parseExcelFile(xlsxPath: string): ParsedExcel {
   const absolutePath = path.resolve(xlsxPath);
   if (!fs.existsSync(absolutePath)) {
     throw new Error(`Excel file not found: ${absolutePath}`);
   }
 
-  const dataDir = targetDir ?? DATA_DIR;
   const workbook = XLSX.readFile(absolutePath);
-  const result: ImportResult = { categories: 0, testCases: 0, skippedSheets: [] };
-  const checksums: Record<string, string> = {};
+  const out: ParsedExcel = {
+    categories: [],
+    totalTestCases: 0,
+    skippedSheets: [],
+    excelMtime: fs.statSync(absolutePath).mtime.toISOString(),
+    checksums: {},
+  };
   let categoryOrder = 0;
 
   for (const sheetName of workbook.SheetNames) {
-    // Skip metadata sheets
-    if (SKIP_SHEETS.has(sheetName.trim())) {
-      result.skippedSheets.push(sheetName);
-      continue;
-    }
+    if (SKIP_SHEETS.has(sheetName.trim())) { out.skippedSheets.push(sheetName); continue; }
 
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) continue;
 
     const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (rows.length <= HEADER_ROW) { out.skippedSheets.push(sheetName); continue; }
 
-    // Validate this is a test sheet by checking header row
-    if (rows.length <= HEADER_ROW) {
-      result.skippedSheets.push(sheetName);
-      continue;
-    }
-
-    // Dynamically find the header row — look for a row containing "ID" and "Steps"
     let headerIdx = -1;
     for (let r = 0; r < Math.min(rows.length, 15); r++) {
       const row = rows[r] as string[];
       if (!row) continue;
       const rowStr = row.map(c => String(c ?? '').toLowerCase()).join('|');
       if (rowStr.includes('id') && (rowStr.includes('step') || rowStr.includes('scenario'))) {
-        headerIdx = r;
-        break;
+        headerIdx = r; break;
       }
     }
-
-    if (headerIdx === -1) {
-      result.skippedSheets.push(sheetName);
-      continue;
-    }
+    if (headerIdx === -1) { out.skippedSheets.push(sheetName); continue; }
 
     const dataStartRow = headerIdx + 1;
-
-    // Create category
     const categorySlug = slugify(sheetName);
-    const categoryDir = path.join(dataDir, 'tests', categorySlug);
-    const category: Category = {
-      id: categorySlug,
-      name: sheetName.trim(),
-      sheet: sheetName,
-      order: categoryOrder++,
+    const cat: ParsedCategory = {
+      id: categorySlug, name: sheetName.trim(), sheet: sheetName,
+      order: categoryOrder++, testCases: [],
     };
-    writeCategory(category, categoryDir);
-    result.categories++;
 
-    // Parse test case rows
     for (let i = dataStartRow; i < rows.length; i++) {
       const row = rows[i] as (string | number | undefined)[];
       if (!row) continue;
-
       const rawId = row[COL.ID];
       if (rawId === undefined || rawId === null || rawId === '') continue;
-
       const id = formatTestId(rawId);
       if (!id) continue;
 
       const steps = String(row[COL.STEPS] ?? '').trim();
       const criteria = String(row[COL.CRITERIA] ?? '').trim();
-
-      // Skip empty rows (no steps and no criteria)
       if (!steps && !criteria) continue;
 
       const scenario = String(row[COL.SCENARIO] ?? 'Happy Path').trim();
       const excelStatus = String(row[COL.STATUS] ?? '').trim();
       const notes = String(row[COL.NOTES] ?? '').trim();
-
-      // Device results from columns I-L
       const deviceResults = parseDeviceColumns(row);
-
-      // Derive title from first meaningful line of steps, or use scenario + id
       const title = deriveTitle(steps, scenario, id);
 
-      const testCase: TestCase = {
-        id,
-        title,
-        category: categorySlug,
-        scenario,
+      cat.testCases.push({
+        id, title, category: categorySlug, scenario,
         status: mapExcelStatus(excelStatus, deviceResults),
         priority: 'P2' as Priority,
         steps: formatSteps(steps),
@@ -144,29 +132,47 @@ export function importExcel(xlsxPath: string, targetDir?: string): ImportResult 
         history: [],
         created: new Date().toISOString().split('T')[0],
         updated: new Date().toISOString().split('T')[0],
-      };
+      });
 
-      writeTestCase(testCase, categoryDir);
+      out.checksums[`${sheetName}:${id}`] = computeChecksum(row);
+    }
+
+    out.categories.push(cat);
+    out.totalTestCases += cat.testCases.length;
+  }
+
+  return out;
+}
+
+// Persist a previously-parsed structure. Used by importExcel; also callable
+// directly by callers that want the parse → preview → write split (S-014-002).
+export function writeParsedExcel(parsed: ParsedExcel, targetDir?: string): ImportResult {
+  const dataDir = targetDir ?? DATA_DIR;
+  const result: ImportResult = { categories: 0, testCases: 0, skippedSheets: [...parsed.skippedSheets] };
+
+  for (const cat of parsed.categories) {
+    const categoryDir = path.join(dataDir, 'tests', cat.id);
+    writeCategory({ id: cat.id, name: cat.name, sheet: cat.sheet, order: cat.order } as Category, categoryDir);
+    result.categories++;
+    for (const tc of cat.testCases) {
+      writeTestCase(tc, categoryDir);
       result.testCases++;
-
-      // Store checksum for sync
-      const checkKey = `${sheetName}:${id}`;
-      checksums[checkKey] = computeChecksum(row);
     }
   }
 
-  // Write sync metadata to project dir
-  const syncMetaPath = path.join(dataDir, '.sync-meta.json');
-  const stats = fs.statSync(absolutePath);
   const syncMeta: SyncMeta = {
     lastImport: new Date().toISOString(),
-    excelModified: stats.mtime.toISOString(),
-    checksums,
+    excelModified: parsed.excelMtime,
+    checksums: parsed.checksums,
   };
   fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(syncMetaPath, JSON.stringify(syncMeta, null, 2), 'utf-8');
+  fs.writeFileSync(path.join(dataDir, '.sync-meta.json'), JSON.stringify(syncMeta, null, 2), 'utf-8');
 
   return result;
+}
+
+export function importExcel(xlsxPath: string, targetDir?: string): ImportResult {
+  return writeParsedExcel(parseExcelFile(xlsxPath), targetDir);
 }
 
 export function getSyncMeta(dataDir?: string): SyncMeta | null {

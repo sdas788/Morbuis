@@ -1,12 +1,12 @@
-# Proposal Review UI + Approve/Reject
+# Story: Proposal Review UI + Approve/Reject
 
 **ID:** S-017-005
 **Project:** morbius
 **Epic:** E-017
-**Stage:** Draft
-**Status:** Todo
+**Stage:** Ready
+**Status:** Done
 **Priority:** P0
-**Version:** 1.0
+**Version:** 1.1
 **Created:** 2026-04-23
 **Updated:** 2026-04-23
 
@@ -41,3 +41,4 @@ As a QA lead, I want a Healing Queue UI that shows validated proposals so that I
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-04-23 | 1.1 | Claude | Implemented: new top-level `Healing` view (sidebar nav item between AppMap and Jira sync, kb shortcut "8"). `HealingQueueView` component polls `GET /api/healing` every 8s. Default filter shows only `validated`/`approved` proposals; checkbox reveals invalidated/error/applied/etc. Each proposal renders as a card bordered by its confidence band (green/yellow/red per S-017-005 thresholds <0.5 / 0.5–0.8 / >0.8) with: state badge, proposal id, testId, platform, truncated flow path, the failed selector (red strikethrough) over the proposed selector (green) — that's the diff view, confidence progress bar + numeric, Claude rationale in italic, error reason if present. Buttons: **Approve and apply** (POST `/approve`), **Modify** (inline input → POST `/modify`), **Reject** (POST `/reject`). On Modify, the user can edit before approving; the edited value is stored on the proposal as `modifiedSelector` for audit. Side fix during build: `didn't` apostrophe in a JSX string literal closed the outer template literal at runtime and silently broke the entire React tree — replaced with `did not`. AC1 + AC2 + AC3 + AC4 met. |
