@@ -1,12 +1,12 @@
 {
-  "runId": "run-flow-1777578431111",
-  "screenshotPath": "screenshots/run-flow-1777578431111/03_acsd_calculator.png",
+  "runId": "run-flow-1777925080340",
+  "screenshotPath": "screenshots/run-flow-1777925080340/03_acsd_calculator.png",
   "status": "fail",
   "failingStep": null,
-  "errorLine": "Assert that \"ACSD Operative Risk Calculator\" is visible... FAILED",
-  "timestamp": "2026-04-30T19:47:37.025Z",
-  "failureCategory": "assertion-failed",
-  "friendlyError": "Assertion failed",
-  "hint": "An `assertVisible` or similar check did not pass. The test ran but the expected condition was not met — likely a real bug in the app, not a flow issue.",
+  "errorLine": null,
+  "timestamp": "2026-05-04T20:04:46.942Z",
+  "failureCategory": "driver-not-running",
+  "friendlyError": "Maestro driver not connected to the device",
+  "hint": "The Maestro Android driver is not reachable. Try: (1) `maestro studio` once to bootstrap the driver, (2) restart the emulator, (3) `adb forward tcp:7001 tcp:7001`, or (4) check that the emulator API level is supported by your Maestro version (`maestro --version`).",
   "device": "android-phone"
 }
