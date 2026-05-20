@@ -21,10 +21,12 @@ let serverPort = 3000;
 const activeRuns = new Map<string, {
   testId: string;
   platform: string;
-  status: 'running' | 'passed' | 'failed';
+  status: 'running' | 'passed' | 'failed' | 'canceled';
   startTime: number;
   endTime?: number;
   output: string;
+  child?: ChildProcess;
+  canceled?: boolean;
 }>();
 
 // Active run stream subscribers: runId → Set of WebSocket connections
@@ -1339,7 +1341,6 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
 
           const runId = 'run-flow-' + Date.now();
           const safeId = path.basename(filePath, '.yaml').replace(/[^a-zA-Z0-9-_]/g, '_');
-          activeRuns.set(runId, { testId: safeId, platform, status: 'running', startTime: Date.now(), output: '' });
 
           const runsDir = path.join(dir, 'runs');
           fs.mkdirSync(runsDir, { recursive: true });
@@ -1350,6 +1351,8 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
             env: { ...process.env },
             cwd: process.cwd(),
           });
+
+          activeRuns.set(runId, { testId: safeId, platform, status: 'running', startTime: Date.now(), output: '', child });
 
           let output = '';
           child.stdout.on('data', (data: Buffer) => {
@@ -1364,18 +1367,26 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
             const chunk = data.toString();
             output += chunk;
             logStream.write(chunk);
+            broadcastRunEvent(runId, { type: 'log', runId, data: chunk });
             const run = activeRuns.get(runId);
             if (run) run.output = output;
           });
 
-          child.on('close', async (code) => {
+          child.on('close', async (code, signal) => {
             logStream.end();
-            const status = code === 0 ? 'pass' : 'fail';
             const run = activeRuns.get(runId);
-            if (run) { run.status = status === 'pass' ? 'passed' : 'failed'; run.endTime = Date.now(); run.output = output; }
+            const wasCanceled = run?.canceled === true;
+            const status: 'pass' | 'fail' | 'canceled' =
+              wasCanceled ? 'canceled' : (code === 0 ? 'pass' : 'fail');
+            if (run) {
+              run.status = status === 'pass' ? 'passed' : status === 'canceled' ? 'canceled' : 'failed';
+              run.endTime = Date.now();
+              run.output = output;
+              run.child = undefined;
+            }
             const { failingStep, errorLine } = parseFailureInfo(output);
-            const screenshotPath = await captureScreenshot(platform, runId, safeId, dir);
-            const classification = status !== 'pass' ? classifyFailure(output) : null;
+            const screenshotPath = status !== 'canceled' ? await captureScreenshot(platform, runId, safeId, dir) : null;
+            const classification = status === 'fail' ? classifyFailure(output) : null;
             const debugFolder = parseDebugFolder(output);
             const deviceSlug = resolveDeviceSlug(platform);
             const record: MaestroRunRecord = {
@@ -1385,7 +1396,7 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
               status: status as any,
               startTime, endTime: new Date().toISOString(),
               durationMs: run ? (run.endTime! - run.startTime) : 0,
-              exitCode: code ?? 1, failingStep, errorLine, screenshotPath,
+              exitCode: code ?? (signal ? 130 : 1), failingStep, errorLine, screenshotPath,
               failureCategory: classification?.category,
               friendlyError: classification?.label,
               hint: classification?.hint,
@@ -1407,6 +1418,22 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
           json(res, { ok: true, runId });
         } catch (err) { res.writeHead(400); res.end(JSON.stringify({ error: String(err) })); }
       });
+      return;
+
+    } else if (pathname.startsWith('/api/flow/run/') && pathname.endsWith('/cancel') && req.method === 'POST') {
+      // Stop a running Maestro flow. Kills the child process — the close handler
+      // then broadcasts a 'done' event with status:'canceled' so the UI unsticks.
+      const runId = pathname.replace('/api/flow/run/', '').replace('/cancel', '');
+      const run = activeRuns.get(runId);
+      if (!run) { res.writeHead(404); res.end(JSON.stringify({ error: 'Run not found' })); return; }
+      if (run.status !== 'running') { json(res, { ok: true, alreadyFinished: true }); return; }
+      run.canceled = true;
+      try {
+        run.child?.kill('SIGTERM');
+        // Hard-kill safety net if SIGTERM is ignored (some maestro sub-processes hang)
+        setTimeout(() => { try { run.child?.kill('SIGKILL'); } catch { /* already dead */ } }, 3000);
+      } catch { /* already exited */ }
+      json(res, { ok: true });
       return;
 
     } else if (pathname === '/api/maestro-tests') {
@@ -8164,12 +8191,14 @@ function MaestroView() {
       // Subscribe to run stream
       const port = location.port || '3000';
       const ws = new WebSocket('ws://'+location.hostname+':'+port+'/ws/run-stream');
+      let gotDone = false;
       ws.onopen = () => ws.send(JSON.stringify({ type:'subscribe', runId }));
       ws.onmessage = (e) => {
         const data = JSON.parse(e.data);
         if (data.type === 'log') {
           setRunState(s => ({...s, [flow.id]: { ...s[flow.id], logs: (s[flow.id]?.logs||'') + data.data }}));
         } else if (data.type === 'done') {
+          gotDone = true;
           setRunState(s => ({...s, [flow.id]: {
             ...s[flow.id],
             status: data.status,
@@ -8188,8 +8217,29 @@ function MaestroView() {
         }
       };
       ws.onerror = () => setRunState(s => ({...s, [flow.id]: { ...s[flow.id], status:'error', logs:(s[flow.id]?.logs||'')+'WebSocket error\\n' }}));
+      // If the socket closes without a 'done' event, unstick the UI rather than
+      // leaving it spinning forever. (Server restart, network blip, etc.)
+      ws.onclose = () => {
+        if (gotDone) return;
+        setRunState(s => {
+          const cur = s[flow.id];
+          if (!cur || cur.status !== 'running') return s;
+          return { ...s, [flow.id]: { ...cur, status:'error', logs:(cur.logs||'')+'\\nConnection lost before test finished. The run may still be in progress on the server — check the Runs tab.\\n' } };
+        });
+      };
     } catch(err) {
       setRunState(s => ({...s, [flow.id]: { status:'error', logs:'Failed to start run: '+String(err), runId:null }}));
+    }
+  }
+
+  async function cancelRun(flow) {
+    const cur = runState[flow.id];
+    if (!cur || !cur.runId || cur.status !== 'running') return;
+    setRunState(s => ({...s, [flow.id]: { ...s[flow.id], logs:(s[flow.id]?.logs||'')+'\\nStopping run…\\n' }}));
+    try {
+      await fetch('/api/flow/run/'+cur.runId+'/cancel', { method:'POST' });
+    } catch(err) {
+      setRunState(s => ({...s, [flow.id]: { ...s[flow.id], logs:(s[flow.id]?.logs||'')+'Cancel failed: '+String(err)+'\\n' }}));
     }
   }
 
@@ -8238,6 +8288,15 @@ function MaestroView() {
                 : runState[activeSelected.id]?.status === 'pass' || runState[activeSelected.id]?.status === 'fail'
                   ? <StatusPill status={runState[activeSelected.id].status}/>
                   : <StatusPill status={activeSelected.status}/>}
+              {runState[activeSelected.id]?.status === 'running' && (
+                <button
+                  className="btn sm"
+                  style={{background:'var(--status-fail, #E5484D)', color:'#fff', borderColor:'transparent'}}
+                  onClick={() => cancelRun(activeSelected)}
+                  title="Stop the running test">
+                  ◼ Stop
+                </button>
+              )}
               {activeSelected.android && (
                 <button
                   className={\`btn sm \${runState[activeSelected.id]?.status==='running' ? 'ghost' : 'primary'}\`}
@@ -8268,7 +8327,8 @@ function MaestroView() {
                   <span className="mono" style={{fontSize:10.5}}>
                     {runState[activeSelected.id].status === 'running' ? '● Running…' :
                      runState[activeSelected.id].status === 'pass' ? '✓ Passed' :
-                     runState[activeSelected.id].status === 'fail' ? '✗ Failed' : '! Error'}
+                     runState[activeSelected.id].status === 'fail' ? '✗ Failed' :
+                     runState[activeSelected.id].status === 'canceled' ? '◼ Stopped' : '! Error'}
                   </span>
                   <button className="icon-btn" onClick={()=>setRunState(s=>{const n={...s};delete n[activeSelected.id];return n;})}><Icon.close/></button>
                 </div>
@@ -8291,7 +8351,7 @@ function MaestroView() {
 //   - Fail without classification: raw failing step + screenshot
 //   - Running: nothing (waits for done event)
 function RunResultCard({ run }) {
-  if (!run || run.status === 'running' || run.status === 'error') return null;
+  if (!run || run.status === 'running' || run.status === 'error' || run.status === 'canceled') return null;
   const isPass = run.status === 'pass';
   const accent = isPass ? 'var(--status-pass, #45E0A8)' : 'var(--status-fail, #E5484D)';
   const bgTint = isPass ? 'rgba(69,224,168,0.06)' : 'rgba(229,72,77,0.06)';
