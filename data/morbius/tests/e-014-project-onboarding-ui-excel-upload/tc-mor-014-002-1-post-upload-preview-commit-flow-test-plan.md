@@ -12,14 +12,14 @@ tags:
   - s-014-002
   - e-014
 created: '2026-04-28'
-updated: '2026-04-30'
+updated: '2026-05-04'
 pmagent_source:
   slug: morbius
   story_id: S-014-002
   ac_index: 0
   source_path: >-
     /Users/sdas/Morbius/requirements/epics/E-014-project-onboarding-upload/T-014-002-s-014-002-test-plan.md
-  source_checksum: 9822b984b8b6ba45
+  source_checksum: 6945371664bb670b
 ---
 ## Steps
 # Test Plan: Post-Upload Preview + Commit Flow
@@ -65,7 +65,7 @@ Verification of S-014-002 acceptance criteria. 3 test case(s) span the happy pat
 **AC Covered:** AC-001
 **Dependencies:** None
 
-<!-- Morbius source: TC-MOR-014-002-1 (sourceChecksum=8008c462a2837fb4) -->
+<!-- Morbius source: TC-MOR-014-002-1 (sourceChecksum=9822b984b8b6ba45) -->
 
 **Preconditions:**
 - (derived from story prerequisites — fill in or leave empty)
@@ -77,8 +77,8 @@ Verification of S-014-002 acceptance criteria. 3 test case(s) span the happy pat
 4. S-014-002
 5. E-014
 6. 1.0
-7. 2026-04-29
-8. 2026-04-29
+7. 2026-04-30
+8. 2026-04-30
 9. > _Generated from Morbius test cases (E-023 publish-back). 3 test case(s) sourced from `morbius:S-014-002`._
 10. ---
 
@@ -90,8 +90,8 @@ Verification of S-014-002 acceptance criteria. 3 test case(s) span the happy pat
 **Story:** S-014-002
 **Epic:** E-014
 **Version:** 1.0
-**Created:** 2026-04-29
-**Updated:** 2026-04-29
+**Created:** 2026-04-30
+**Updated:** 2026-04-30
 
 > _Generated from Morbius test cases (E-023 publish-back). 3 test case(s) sourced from `morbius:S-014-002`._
 
@@ -152,7 +152,7 @@ Verification of S-014-002 acceptance criteria. 3 test case(s) span the happy pat
 **AC Covered:** AC-001
 **Dependencies:** None
 
-<!-- Morbius source: TC-MOR-014-002-1 (sourceChecksum=8008c462a2837fb4) -->
+<!-- Morbius source: TC-MOR-014-002-1 (sourceChecksum=9822b984b8b6ba45) -->
 
 **Preconditions:**
 - (derived from story prerequisites — fill in or leave empty)
@@ -164,8 +164,8 @@ Verification of S-014-002 acceptance criteria. 3 test case(s) span the happy pat
 4. S-014-002
 5. E-014
 6. 1.0
-7. 2026-04-29
-8. 2026-04-29
+7. 2026-04-30
+8. 2026-04-30
 9. > _Generated from Morbius test cases (E-023 publish-back). 3 test case(s) sourced from `morbius:S-014-002`._
 10. ---
 
@@ -177,8 +177,8 @@ Verification of S-014-002 acceptance criteria. 3 test case(s) span the happy pat
 **Story:** S-014-002
 **Epic:** E-014
 **Version:** 1.0
-**Created:** 2026-04-29
-**Updated:** 2026-04-29
+**Created:** 2026-04-30
+**Updated:** 2026-04-30
 
 > _Generated from Morbius test cases (E-023 publish-back). 3 test case(s) sourced from `morbius:S-014-002`._
 

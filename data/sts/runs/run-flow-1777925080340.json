@@ -1,0 +1,19 @@
+{
+  "runId": "run-flow-1777925080340",
+  "testId": "03_acsd_calculator",
+  "platform": "android",
+  "runner": "maestro",
+  "target": "android",
+  "status": "fail",
+  "startTime": "2026-05-04T20:04:40.342Z",
+  "endTime": "2026-05-04T20:04:46.942Z",
+  "durationMs": 2449,
+  "exitCode": 1,
+  "failingStep": null,
+  "errorLine": null,
+  "screenshotPath": "screenshots/run-flow-1777925080340/03_acsd_calculator.png",
+  "failureCategory": "driver-not-running",
+  "friendlyError": "Maestro driver not connected to the device",
+  "hint": "The Maestro Android driver is not reachable. Try: (1) `maestro studio` once to bootstrap the driver, (2) restart the emulator, (3) `adb forward tcp:7001 tcp:7001`, or (4) check that the emulator API level is supported by your Maestro version (`maestro --version`).",
+  "device": "android-phone"
+}

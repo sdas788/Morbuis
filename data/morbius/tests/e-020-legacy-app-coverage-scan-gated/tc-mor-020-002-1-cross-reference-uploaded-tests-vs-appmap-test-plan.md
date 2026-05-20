@@ -12,14 +12,14 @@ tags:
   - s-020-002
   - e-020
 created: '2026-04-28'
-updated: '2026-04-30'
+updated: '2026-05-04'
 pmagent_source:
   slug: morbius
   story_id: S-020-002
   ac_index: 0
   source_path: >-
     /Users/sdas/Morbius/requirements/epics/E-020-legacy-app-coverage-scan/T-020-002-s-020-002-test-plan.md
-  source_checksum: 12e00aa8577b5448
+  source_checksum: 6a5ee0e9b8c7db3a
 ---
 ## Steps
 # Test Plan: Cross-Reference Uploaded Tests vs AppMap
@@ -64,7 +64,7 @@ Verification of S-020-002 acceptance criteria. 2 test case(s) span the happy pat
 **AC Covered:** AC-001
 **Dependencies:** None
 
-<!-- Morbius source: TC-MOR-020-002-1 (sourceChecksum=12a2a9ce75e3e309) -->
+<!-- Morbius source: TC-MOR-020-002-1 (sourceChecksum=12e00aa8577b5448) -->
 
 **Preconditions:**
 - (derived from story prerequisites — fill in or leave empty)
@@ -76,8 +76,8 @@ Verification of S-020-002 acceptance criteria. 2 test case(s) span the happy pat
 4. S-020-002
 5. E-020
 6. 1.0
-7. 2026-04-29
-8. 2026-04-29
+7. 2026-04-30
+8. 2026-04-30
 9. > _Generated from Morbius test cases (E-023 publish-back). 2 test case(s) sourced from `morbius:S-020-002`._
 10. ---
 
@@ -89,8 +89,8 @@ Verification of S-020-002 acceptance criteria. 2 test case(s) span the happy pat
 **Story:** S-020-002
 **Epic:** E-020
 **Version:** 1.0
-**Created:** 2026-04-29
-**Updated:** 2026-04-29
+**Created:** 2026-04-30
+**Updated:** 2026-04-30
 
 > _Generated from Morbius test cases (E-023 publish-back). 2 test case(s) sourced from `morbius:S-020-002`._
 
@@ -150,7 +150,7 @@ Verification of S-020-002 acceptance criteria. 2 test case(s) span the happy pat
 **AC Covered:** AC-001
 **Dependencies:** None
 
-<!-- Morbius source: TC-MOR-020-002-1 (sourceChecksum=12a2a9ce75e3e309) -->
+<!-- Morbius source: TC-MOR-020-002-1 (sourceChecksum=12e00aa8577b5448) -->
 
 **Preconditions:**
 - (derived from story prerequisites — fill in or leave empty)
@@ -162,8 +162,8 @@ Verification of S-020-002 acceptance criteria. 2 test case(s) span the happy pat
 4. S-020-002
 5. E-020
 6. 1.0
-7. 2026-04-29
-8. 2026-04-29
+7. 2026-04-30
+8. 2026-04-30
 9. > _Generated from Morbius test cases (E-023 publish-back). 2 test case(s) sourced from `morbius:S-020-002`._
 10. ---
 
@@ -175,8 +175,8 @@ Verification of S-020-002 acceptance criteria. 2 test case(s) span the happy pat
 **Story:** S-020-002
 **Epic:** E-020
 **Version:** 1.0
-**Created:** 2026-04-29
-**Updated:** 2026-04-29
+**Created:** 2026-04-30
+**Updated:** 2026-04-30
 
 > _Generated from Morbius test cases (E-023 publish-back). 2 test case(s) sourced from `morbius:S-020-002`._
 
