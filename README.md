@@ -4,6 +4,10 @@ A visual QA workspace for teams using Maestro + Claude Code for mobile test auto
 
 Your QA team writes test cases in Excel. Claude Code + Maestro converts them to automated YAML tests. Morbius gives everyone — QA, devs, PMs — a browser-based Kanban board to see what's passing, failing, and needs attention. Edit status, create bugs, add notes, run tests, chat with the agent — all from the browser. No backend. No cloud. Just files.
 
+**Two surfaces, one core:**
+- **Web app** (`src/`) — local-first dashboard, served on `localhost:3000`. The Bet B / SaaS-ready surface.
+- **Mac app** (`morbius-mac/`) — Electron 34, chat-first agentic shell. The Bet C engineer surface (E-001–E-015 shipped; see `morbius-mac/QA-PLAN.md`).
+
 ---
 
 ## How It Works
@@ -16,7 +20,7 @@ Excel File ──→ morbius import ──→ Markdown Files ──→ morbius s
                                  morbius export ──→ Changes back to Excel
 ```
 
-**Multi-project:** Switch between apps (Micro-Air, STS, etc.) from the sidebar. Each project has its own test cases, bugs, and Maestro flows.
+**Multi-project:** Switch between apps (Micro-Air, STS, Cooper's Hawk, etc.) from the sidebar. Each project has its own test cases, bugs, and Maestro flows.
 
 ---
 
@@ -210,7 +214,9 @@ DESTROY:  12 → 13 → 14
 ### Run Tests
 - **Run from dashboard** — "Run Android" / "Run iOS" buttons when Maestro flows are linked
 - **Live status** — Spinner with elapsed time, then pass/fail badge
+- **Stop button** — Cancel a running flow mid-execution (SIGTERM + 3s SIGKILL safety net)
 - **Auto-update** — Test status updates after run completes
+- **Socket-loss recovery** — UI unsticks if the WebSocket drops before the run finishes
 
 ### Integrations
 - **Jira sync** — Pull bug tickets from Jira into the Bug Board
@@ -275,11 +281,26 @@ Morbius is evolving from a local developer tool into a full SaaS QA automation p
 | 1 | MVP Dashboard + Excel Import | ✅ Complete |
 | 2 | Agent Intelligence + Sorting + Changelog + Chat | ✅ Complete |
 | 2.5 | Maestro Flow Restructure (14 flows) + App Map | ✅ Complete |
-| 3 | BrowserStack + One-Click Cloud Runs | 🔜 Next |
-| 4 | Settings Page + Integrations (Jira, Linear, Slack) | Planned |
-| 5 | Multi-Framework (Appium + Detox adapters) | Planned |
-| 6 | Claude API Integration + Self-Healing Tests | Planned |
-| 7 | SaaS Platform (auth, database, multi-tenant) | Planned |
-| 8 | Visual Regression + CI/CD + Analytics | Planned |
+| R-002 | Jira hardening, Excel onboarding UI, bug-impact AI, self-healing selectors, AppMap Storyteller (E-013 → E-027) | ✅ Complete |
+| Mac v0.1 | Electron shell, embedded agent runtime, 19 built-in tools, permission UX, activity stream, skills + memory, approval queue, kill switch (E-001 → E-015) | ✅ Complete |
+| v2.0 cloud | Fly.io + Cloudflare Access + PMAgent repo checkout (E-025) | 🔜 In progress |
+| v2.1 runner | Anthropic Managed Agents migration (E-026) | Planned |
+| BrowserStack | One-Click Cloud Runs | Planned |
+| SaaS | Auth, database, multi-tenant | Planned |
 
-See [ROADMAP.md](./ROADMAP.md) for full details on each phase.
+See [ROADMAP.md](./ROADMAP.md) for full phase details, and `requirements/releases/` for release plans.
+
+## Repo layout
+
+```
+src/                    Web app server + embedded React dashboard
+morbius-mac/            Electron Mac app (chat-first agentic)
+data/                   Per-project markdown DB (tests, bugs, runs, screenshots)
+  projects.json         Project registry
+  micro-air/            Micro-Air ConnectRV
+  sts/                  STS Wholesale
+  cooper-s-hawk-mobile-app/  Cooper's Hawk Mobile App
+  morbius/              Morbius's own test data (dogfooding)
+flows/                  Maestro YAML — 14 feature-area flows
+requirements/           Brief, epics (E-001 → E-027), releases, arch, design tokens
+```
