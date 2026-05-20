@@ -1,0 +1,75 @@
+{
+  "name": "morbius-mac",
+  "version": "0.1.0",
+  "description": "Morbius — chat-first agentic QA Mac app",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build": "electron-builder --mac --dir",
+    "dist": "electron-builder --mac",
+    "publish": "electron-builder --mac --publish always"
+  },
+  "build": {
+    "appId": "com.redfoundry.morbius-mac",
+    "productName": "Morbius",
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist-mac",
+      "buildResources": "assets"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["arm64", "x64"]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist",
+      "notarize": {
+        "teamId": "$APPLE_TEAM_ID"
+      },
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "Morbius drives iOS simulators via AppleScript and xcrun.",
+        "NSCameraUsageDescription": "Not used",
+        "NSMicrophoneUsageDescription": "Not used"
+      }
+    },
+    "dmg": {
+      "sign": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "RedFoundry",
+        "repo": "morbius-mac"
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "electron-updater": "^6.8.3",
+    "mermaid": "^11.15.0",
+    "simple-git": "^3.36.0"
+  }
+}

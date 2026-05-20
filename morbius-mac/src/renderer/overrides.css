@@ -1,0 +1,298 @@
+/* Overrides — design tokens were sized for an artboard. Make them fit the actual window.
+   Glass theme requires the wallpaper underneath to refract — let .mac-window::before
+   (defined in styles-glass.css) paint the wallpaper across the whole viewport. */
+
+html, body, #root { height: 100%; margin: 0; padding: 0; }
+body { background: #07080a !important; color: var(--fg); font-family: var(--font-sans); overflow: hidden; }
+body.theme-light { background: #e9e9ec !important; }
+
+.mac-window {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  box-shadow: none;
+}
+/* Wallpaper layer covers the whole viewport (no rounded corners since the OS already rounds the window) */
+.mac-window::before, .mac-window::after { border-radius: 0; }
+
+/* Native traffic lights are drawn by macOS — leave room but don't duplicate */
+.titlebar {
+  -webkit-app-region: drag;
+  padding-left: 84px;
+  grid-template-columns: 1fr auto;
+}
+.titlebar .traffic { display: none; }
+.titlebar .title-right, .titlebar .title-center, .titlebar button, .titlebar .icon-btn, .titlebar .proj-chip, .titlebar .sync-pill { -webkit-app-region: no-drag; cursor: default; }
+.title-center { justify-content: flex-start; }
+
+/* 52px nav-rail + 220px conv sidebar + chat + 340px activity rail */
+.body { grid-template-columns: 52px 220px 1fr 340px; }
+.body.no-rail { grid-template-columns: 52px 220px 1fr; }
+.body.no-sidebar { grid-template-columns: 52px 1fr 340px; }
+.body.solo { grid-template-columns: 52px 1fr; }
+.body.bare { grid-template-columns: 1fr; }
+
+/* Interactive cursor states */
+.conv-row, .new-conv, .dev-row, .palette-row, .empty .chip, button { cursor: pointer; }
+button { font-family: inherit; }
+
+/* Chat input becomes a real textarea */
+.chat-input textarea {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  resize: none;
+  color: var(--fg);
+  font: 13.5px var(--font-sans);
+  min-height: 28px;
+}
+
+/* Secondary views */
+.view-panel {
+  flex: 1;
+  overflow: hidden auto;
+  padding: 24px 32px;
+}
+.view-panel h1 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.view-panel .sub { color: var(--fg-muted); font-size: 13px; margin-bottom: 22px; }
+.view-panel .row {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 4px;
+  border-top: 1px solid var(--border);
+}
+.view-panel .row:last-child { border-bottom: 1px solid var(--border); }
+.view-panel .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+.view-panel .card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  font-size: 13px;
+}
+.view-panel .card .title { font-weight: 600; margin-bottom: 4px; }
+.view-panel .card .meta { color: var(--fg-muted); font-size: 12px; }
+
+.kbd { cursor: default; }
+
+.toast {
+  position: fixed; right: 16px; bottom: 16px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  padding: 10px 14px; border-radius: 8px;
+  color: var(--fg);
+  font-size: 12.5px;
+  box-shadow: var(--shadow-pop);
+  z-index: 9999;
+  animation: toastIn 150ms ease-out;
+}
+@keyframes toastIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+.theme-light { background: var(--bg); }
+
+/* Preview banner — marks surfaces that are still mockups */
+.preview-banner {
+  display: flex; align-items: center; gap: 10px;
+  margin: 12px 18px 0;
+  padding: 8px 14px;
+  background: rgba(251,191,36,0.08);
+  border: 1px solid rgba(251,191,36,0.35);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.preview-banner .badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--warn);
+  color: #1c1d1f;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.preview-banner .what { color: var(--fg); }
+.preview-banner .why { color: var(--fg-muted); }
+.preview-banner .what code { color: var(--fg); }
+
+/* chat3.md fixes — ensure form controls inherit the app font */
+button, input, textarea, select { font: inherit; }
+
+/* Flex-aware wrapper for any view body that contains a header bar (filter-bar / strip / stats)
+   followed by a scrollable content area (kanban / list / table). Without this, the unstyled
+   parent `<div>` breaks the flex chain and the content collapses or overflows. */
+.view-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* chat3.md fix — view-head action buttons must stay on one line */
+.view-head .vbtn, .filter-bar .fchip { white-space: nowrap; }
+
+/* chat3.md fix — base .btn-sm so unscoped buttons aren't browser-default */
+.btn-sm {
+  font: 500 11.5px var(--font-sans);
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border-strong);
+  color: var(--fg);
+  background: var(--bg-elev);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.btn-sm:hover { background: var(--bg-hover); }
+.btn-sm.primary { background: var(--accent); color: var(--accent-ink, #1c1d1f); border-color: transparent; font-weight: 600; }
+.btn-sm.ghost { background: transparent; color: var(--fg-muted); border-color: var(--border); }
+
+/* chat3.md fix — kbd badges inside buttons compact so they don't inflate height */
+button .kbd, .btn .kbd, .qa .kbd, .vbtn .kbd {
+  padding: 1px 5px;
+  line-height: 1.2;
+  font-size: 9.5px;
+}
+
+/* Bug drawer backdrop — dims the kanban behind, lets clicks bubble to close */
+.drawer-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 90;
+}
+.theme-light .drawer-backdrop { background: rgba(0,0,0,0.20); }
+
+/* Solid drawer background — the design's --bg-elev is ~5% white in glass mode,
+   nearly transparent. We need a real opaque surface so kanban content behind
+   doesn't bleed through and so text stays legible. */
+.drawer {
+  z-index: 91;
+  background: #14181f !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.16) !important;
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.55) !important;
+}
+.theme-light .drawer {
+  background: #ffffff !important;
+  border-left: 1px solid rgba(0, 0, 0, 0.10) !important;
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.18) !important;
+}
+
+/* Constrain drawer body so long unbreakable tokens (file paths, hashes) wrap
+   instead of overflowing past the drawer's 540px width. */
+.drawer .dr-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden auto;
+  padding: 14px 18px 18px;
+}
+.drawer .dr-section, .drawer .dr-section * {
+  min-width: 0;
+  max-width: 100%;
+}
+.drawer .dr-section .kvs .v {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.drawer .dr-section pre, .drawer .dr-section code, .drawer .dr-section .code-block {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.drawer .dr-section table { table-layout: fixed; width: 100%; }
+.drawer .dr-section table td { word-break: break-word; }
+
+/* Modal + project switcher */
+.modal-scrim {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: grid; place-items: center;
+  z-index: 100;
+}
+.project-switcher {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  width: 520px;
+  box-shadow: var(--shadow-modal);
+  overflow: hidden;
+}
+.project-switcher .phead {
+  padding: 12px 16px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--fg-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Onboarding */
+.onboarding {
+  flex: 1; min-height: 0; overflow: hidden auto;
+  display: grid; place-items: center;
+  padding: 24px;
+}
+.onboarding .card {
+  max-width: 560px;
+  width: 100%;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px;
+}
+.onboarding h1 { font-size: 22px; margin: 0 0 8px; font-weight: 600; }
+.onboarding p  { color: var(--fg-muted); font-size: 13.5px; line-height: 1.55; }
+.onboarding .step-dots {
+  display: flex; gap: 6px; margin-bottom: 18px;
+}
+.onboarding .step-dots .dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--border);
+}
+.onboarding .step-dots .dot.active { background: var(--accent); }
+.onboarding input[type=text], .onboarding input[type=password] {
+  width: 100%; padding: 10px 12px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font: 13px var(--font-mono);
+  outline: 0;
+  margin-top: 10px;
+}
+.onboarding input:focus { border-color: var(--accent); }
+.onboarding .actions {
+  display: flex; justify-content: space-between; gap: 8px;
+  margin-top: 24px;
+}
+
+/* Settings credential card */
+.cred-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  margin: 8px 0;
+}
+.cred-card .cred-title { font-weight: 600; margin-bottom: 6px; font-size: 13px; }
+.cred-card .cred-mask {
+  font-family: var(--font-mono); letter-spacing: 2px;
+  color: var(--fg-muted); margin-bottom: 4px;
+}
+.cred-card .cred-meta { font-size: 11.5px; color: var(--fg-dim); margin-bottom: 10px; }
+.cred-card .cred-actions { display: flex; gap: 8px; }
