@@ -157,7 +157,10 @@ export function parsePMAgentProject(pmagentPath: string, slug: string): PMAgentP
 
       for (const row of acRows) {
         const checksum = sha256Norm(row.rawText);
-        const testId = 'TC-' + slug.toUpperCase().slice(0, 3) + '-' + storyId.replace(/^S-/, '') + '-' + (row.acIndex + 1);
+        // Strip dashes before slicing so a hyphenated slug ("ch-mobile") doesn't
+        // leak its own dash into the prefix (was producing "TC-CH--001-...").
+        const slugPrefix = slug.toUpperCase().replace(/-/g, '').slice(0, 3);
+        const testId = 'TC-' + slugPrefix + '-' + storyId.replace(/^S-/, '') + '-' + (row.acIndex + 1);
         const scenario = pickScenario(row.rawText, row.acIndex);
 
         const tc: TestCase = {
@@ -301,8 +304,22 @@ function gwtToSteps(ac: string): string {
 }
 
 function pickScenario(text: string, acIndex: number): string {
-  if (NEGATIVE_KEYWORDS.test(text)) return 'Negative';
-  if (EDGE_KEYWORDS.test(text)) return 'Edge Case';
+  // Prefer the test plan's explicit `**Type:**` metadata (the primary/first sub-case).
+  // This is authoritative; keyword-sniffing the whole body wrongly trips on
+  // "Failure Indicators" sections (the `fail` keyword) and mislabels happy paths.
+  const typeMatch = text.match(/\*\*Type:\*\*\s*([A-Za-z][A-Za-z \-]*)/);
+  if (typeMatch) {
+    const t = typeMatch[1].trim().toLowerCase();
+    if (/neg/.test(t)) return 'Negative';
+    if (/edge|boundary/.test(t)) return 'Edge Case';
+    if (/e2e|flow|integration/.test(t)) return 'Flow';
+    return 'Happy Path'; // E2E/Unit/Smoke/etc. → positive primary path
+  }
+  // Fallback (story-AC path, short text): keyword-sniff but ignore the
+  // Failure-Indicators / Expected-Result sections that describe error states.
+  const cleaned = text.replace(/(^|\n)\s*\*\*?(Failure Indicators|Expected Result)\*\*?:?[\s\S]*?(?=\n\s*#{1,3}\s|\n\s*\*\*[A-Z]|$)/gi, '');
+  if (NEGATIVE_KEYWORDS.test(cleaned)) return 'Negative';
+  if (EDGE_KEYWORDS.test(cleaned)) return 'Edge Case';
   return acIndex === 0 ? 'Happy Path' : 'Detour';
 }
 

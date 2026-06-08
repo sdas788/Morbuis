@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { WebSocketServer, WebSocket } from 'ws';
-import { loadAllTestCases, loadAllBugs, loadAllCategories, loadAllRuns, loadProjectRegistry, saveProjectRegistry, loadProjectConfig, saveProjectConfig, getDataDir, updateTestCaseById, updateBugById, writeBug, writeBugImpact, readBugImpact, writeHealingProposal, readHealingProposal, loadAllHealingProposals, writeTestCase as writeTestCaseToDisk, writeAppMapNarrative, readAppMapNarrative } from './parsers/markdown.js';
+import { loadAllTestCases, loadTestCaseMarkdownBody, loadAllBugs, loadAllCategories, loadAllRuns, loadProjectRegistry, saveProjectRegistry, loadProjectConfig, saveProjectConfig, getDataDir, updateTestCaseById, updateBugById, writeBug, writeBugImpact, readBugImpact, writeHealingProposal, readHealingProposal, loadAllHealingProposals, writeTestCase as writeTestCaseToDisk, writeAppMapNarrative, readAppMapNarrative, loadAutomationPlan, saveAutomationPlan } from './parsers/markdown.js';
+import type { AutomationPlan, AutomationCandidate, ProposedFlow } from './types.js';
 import { importExcel, parseExcelFile, writeParsedExcel, type ParsedExcel } from './parsers/excel.js';
 import { parsePMAgentProject, publishTestPlansToPMAgent, type PMAgentParseResult } from './parsers/pmagent.js';
 import { runAgentTask } from './runners/web-agent.js';
@@ -687,7 +688,8 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
         } catch { /* skip */ }
       }
 
-      json(res, { ...test, maestroHtml, maestroYaml, selectorWarnings });
+      const markdownBody = loadTestCaseMarkdownBody(id, dir);
+      json(res, { ...test, maestroHtml, maestroYaml, selectorWarnings, markdownBody });
     } else if (pathname.startsWith('/api/bug/') && req.method === 'GET' && !pathname.includes('/update') && !pathname.includes('/create') && !pathname.includes('/impact')) {
       const id = decodeURIComponent(pathname.replace('/api/bug/', ''));
       const bugs = loadAllBugs(dir);
@@ -965,6 +967,161 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
       });
       return;
 
+    // ── E-028: Automation Planner ─────────────────────────────────────────
+    } else if (pathname === '/api/automation-plan' && req.method === 'GET') {
+      const registry = loadProjectRegistry();
+      const projectId = registry.activeProject;
+      const cfg = loadProjectConfig(projectId);
+      const tests = loadAllTestCases(dir);
+      const plan: AutomationPlan = loadAutomationPlan(projectId) || { projectId, updatedAt: '', candidates: [], flows: [] };
+      // Lightweight test projection for the triage list.
+      const testRows = tests.map(t => ({
+        id: t.id, title: t.title, category: t.category,
+        priority: t.priority, scenario: t.scenario,
+        tags: t.tags, platforms: t.platforms,
+      }));
+      const byDecision = { automate: 0, manual: 0, blocked: 0, defer: 0, untriaged: 0 };
+      const triaged = new Set(plan.candidates.map(c => c.testId));
+      for (const t of tests) {
+        const c = plan.candidates.find(x => x.testId === t.id);
+        if (!c) byDecision.untriaged++;
+        else byDecision[c.decision]++;
+      }
+      const flowsByStatus = plan.flows.reduce((m: Record<string, number>, f) => { m[f.status] = (m[f.status] || 0) + 1; return m; }, {});
+      const blockedFlows = plan.flows.filter(f => (f.blockers || []).length > 0).length;
+      // Include any on-disk generated YAML so the board can show a flow's Maestro plan on click.
+      const flowsDir = path.join(dir, 'flows');
+      const flowFiles: Record<string, { path: string; yaml: string }> = {};
+      for (const f of plan.flows) {
+        const fp = path.join(flowsDir, f.id + '.yaml');
+        if (fs.existsSync(fp)) { try { flowFiles[f.id] = { path: fp, yaml: fs.readFileSync(fp, 'utf-8') }; } catch { /* skip */ } }
+      }
+      json(res, {
+        projectId,
+        tests: testRows,
+        candidates: plan.candidates,
+        flows: plan.flows,
+        flowFiles,
+        personas: cfg?.testAccounts || [],
+        summary: {
+          totalTests: tests.length,
+          triaged: triaged.size,
+          byDecision,
+          totalFlows: plan.flows.length,
+          flowsByStatus,
+          automatableNow: plan.flows.length - blockedFlows,
+          blockedFlows,
+        },
+      });
+      return;
+    } else if (pathname === '/api/automation-plan/candidate' && req.method === 'POST') {
+      readBody(req, (body) => {
+        try {
+          const registry = loadProjectRegistry();
+          const projectId = registry.activeProject;
+          const incoming = JSON.parse(body) as AutomationCandidate;
+          if (!incoming.testId || !incoming.decision) { res.writeHead(400); res.end('{"ok":false,"error":"testId + decision required"}'); return; }
+          const plan: AutomationPlan = loadAutomationPlan(projectId) || { projectId, updatedAt: '', candidates: [], flows: [] };
+          const i = plan.candidates.findIndex(c => c.testId === incoming.testId);
+          if (i >= 0) plan.candidates[i] = { ...plan.candidates[i], ...incoming };
+          else plan.candidates.push(incoming);
+          plan.updatedAt = new Date().toISOString();
+          saveAutomationPlan(plan);
+          json(res, { ok: true, candidate: plan.candidates.find(c => c.testId === incoming.testId) });
+        } catch (err) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: String(err) })); }
+      });
+      return;
+    } else if (pathname === '/api/automation-plan/flow' && req.method === 'POST') {
+      readBody(req, (body) => {
+        try {
+          const registry = loadProjectRegistry();
+          const projectId = registry.activeProject;
+          const incoming = JSON.parse(body) as ProposedFlow;
+          if (!incoming.id) { res.writeHead(400); res.end('{"ok":false,"error":"flow id required"}'); return; }
+          const plan: AutomationPlan = loadAutomationPlan(projectId) || { projectId, updatedAt: '', candidates: [], flows: [] };
+          const i = plan.flows.findIndex(f => f.id === incoming.id);
+          if (i >= 0) plan.flows[i] = { ...plan.flows[i], ...incoming };
+          else plan.flows.push(incoming);
+          plan.updatedAt = new Date().toISOString();
+          saveAutomationPlan(plan);
+          json(res, { ok: true, flow: plan.flows.find(f => f.id === incoming.id) });
+        } catch (err) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: String(err) })); }
+      });
+      return;
+    } else if (pathname === '/api/automation-plan/scaffold' && req.method === 'POST') {
+      readBody(req, async (body) => {
+        try {
+          const registry = loadProjectRegistry();
+          const projectId = registry.activeProject;
+          const { flowId } = JSON.parse(body) as { flowId?: string };
+          const plan = loadAutomationPlan(projectId);
+          const flow = plan?.flows.find(f => f.id === flowId);
+          if (!plan || !flow) { res.writeHead(404); res.end('{"ok":false,"error":"flow not found"}'); return; }
+          if ((flow.blockers || []).length > 0) { res.writeHead(409); res.end(JSON.stringify({ ok: false, error: 'flow has blockers: ' + flow.blockers!.join('; ') })); return; }
+          const cfg = loadProjectConfig(projectId);
+          const persona = (cfg?.testAccounts || []).find(p => p.key === flow.personaKey);
+          // Gather the covered test cases' real markdown bodies (the planning artifact's substance).
+          const caseDocs = flow.testIds.map(id => {
+            const body = loadTestCaseMarkdownBody(id, dir) || '(no body)';
+            return '### ' + id + '\n' + body.slice(0, 1800);
+          }).join('\n\n');
+          const personaLine = persona
+            ? 'Persona: ' + persona.label + '. Use env interpolation for credentials: '
+              + Object.entries(persona.envKeys).map(([k, v]) => k + '=${' + v + '}').join(', ')
+              + (persona.programId ? '. Program ID: ' + persona.programId : '')
+            : 'Persona: (none assigned).';
+          const prompt = [
+            'You are the Morbius flow-author agent. Write ONE Maestro YAML flow that covers the test cases below as a single feature-area journey.',
+            'Output ONLY the YAML (no prose, no markdown fences).',
+            '',
+            'appId: ' + (cfg?.appId || '(unknown)'),
+            'Flow id/name: ' + flow.id + ' — ' + flow.name,
+            'Platforms: ' + (flow.platforms || []).join(', '),
+            personaLine,
+            '',
+            'RULES:',
+            '- React Native app: begin with `- stopApp`, `- clearState`, `- launchApp` (clearState as a separate step, NOT inside launchApp).',
+            '- Interpolate credentials only via ${ENV_NAME}; never inline secrets.',
+            '- This app sets NO testIDs — prefer `tapOn: { text: ... }` and `id:` resource-ids; selectors are best-effort and the self-healing loop will repair misses.',
+            '- Cover ALL listed cases in this one flow; add `# QA Plan ID: <id>` comments per section.',
+            '- Use extendedWaitUntil for screen transitions; avoid fixed sleeps and coordinates.',
+            '',
+            'APP NAVIGATION MAP (mermaid):',
+            (cfg?.appMap || '(none)').slice(0, 2500),
+            '',
+            'TEST CASES TO COVER:',
+            caseDocs,
+          ].join('\n');
+          flow.status = 'scaffolded';
+          plan.updatedAt = new Date().toISOString();
+          saveAutomationPlan(plan);
+          const ai = await askClaude(prompt, { timeoutMs: 280_000, kind: 'other', projectId });
+          if (!ai.ok) {
+            json(res, { ok: false, flow, error: 'agent generation failed: ' + (ai.error || 'no output') + ' — flow left as scaffolded.' });
+            return;
+          }
+          const aiText = ai.text || '';
+          if (!aiText.trim()) {
+            json(res, { ok: false, flow, error: 'agent returned empty output — flow left as scaffolded.' });
+            return;
+          }
+          // Strip accidental code fences.
+          let yaml = aiText.trim().replace(/^```ya?ml\s*/i, '').replace(/```$/i, '').trim();
+          const flowsDir = path.join(dir, 'flows');
+          fs.mkdirSync(flowsDir, { recursive: true });
+          const filePath = path.join(flowsDir, flow.id + '.yaml');
+          fs.writeFileSync(filePath, yaml + '\n', 'utf-8');
+          flow.status = 'written';
+          plan.updatedAt = new Date().toISOString();
+          saveAutomationPlan(plan);
+          json(res, {
+            ok: true, flow, path: filePath, yaml,
+            generatedBy: 'askClaude', durationMs: ai.durationMs,
+            next: 'DRAFT written. Run it via the Maestro run pipeline; selector misses route to the E-017 self-healing loop. For production-grade selectors, refine with the interactive morbius-write-flows skill (live Maestro MCP exploration).',
+          });
+        } catch (err) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: String(err) })); }
+      });
+      return;
     } else if (pathname === '/api/appmap/narrative' && req.method === 'GET') {
       // E-027 S-027-001: read the project-level AppMap narrative.
       const registry = loadProjectRegistry();
@@ -1552,6 +1709,32 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
         } else {
           scanMaestroDir(iosPath, 'ios');
           scanSharedFlows(iosPath, 'ios');
+        }
+      }
+
+      // E-028: surface Automation-Planner draft flows (data/<project>/flows/*.yaml) in the
+      // Maestro tab too, independent of the external Maestro paths (which may not exist yet).
+      const draftDir = path.join(dir, 'flows');
+      if (fs.existsSync(draftDir)) {
+        const draftFiles = fs.readdirSync(draftDir).filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
+        if (draftFiles.length) {
+          let cat = categories.find(c => c.slug === 'automation-plan');
+          if (!cat) { cat = { name: 'Automation Plan (drafts)', slug: 'automation-plan', flows: [] }; categories.push(cat); }
+          for (const file of draftFiles) {
+            const filePath = path.join(draftDir, file);
+            try {
+              const rawYaml = fs.readFileSync(filePath, 'utf-8');
+              const flow = parseMaestroYaml(filePath);
+              cat.flows.push({
+                name: flow.name || file.replace(/\.ya?ml$/, '').replace(/_/g, ' '),
+                qaPlanId: flow.qaPlanId, filePath, fileName: file, platform: 'android',
+                tags: flow.tags, stepsCount: flow.steps.length,
+                steps: flow.steps.map(s => ({ action: s.action, humanReadable: s.humanReadable })),
+                envVars: flow.envVars, warnings: flow.selectorWarnings.length,
+                selectorWarnings: flow.selectorWarnings, referencedFlows: flow.referencedFlows, rawYaml,
+              });
+            } catch { /* skip */ }
+          }
         }
       }
 
@@ -3709,6 +3892,25 @@ async function runPMAgentTransfer(opts: {
   const projectDir = path.join(getDataRoot(), projectId);
   fs.mkdirSync(projectDir, { recursive: true });
 
+  // Onboarding: ensure a config.json stub exists so the project is fully onboarded
+  // (appId / maestro paths / personas to be filled in). Without this, pmagent-synced
+  // projects had test cases but no config — they couldn't run flows or pass `morbius doctor`.
+  if (!loadProjectConfig(projectId)) {
+    saveProjectConfig({
+      id: projectId,
+      name: projectConfig.name,
+      created: projectConfig.created,
+      devices: projectConfig.devices,
+      pmagentSlug: slug,
+      projectType: projectConfig.projectType ?? 'mobile',
+      appId: '',
+      maestro: { androidPath: '', iosPath: '' },
+      env: {},
+      testAccounts: [],
+      ...(projectConfig.webUrl ? { webUrl: projectConfig.webUrl } : {}),
+    });
+  }
+
   // Diff against prior sync state
   const priorState = loadPMAgentSyncState(projectDir);
   const priorChecksums = priorState?.checksums ?? {};
@@ -3716,6 +3918,12 @@ async function runPMAgentTransfer(opts: {
   // Index existing test cases on disk so we can preserve history[] + changelog[]
   const existingTests = loadAllTestCases(projectDir);
   const existingById = new Map(existingTests.map(t => [t.id, t]));
+
+  // Migration note: the old ID scheme leaked a hyphen ("TC-CH--001-..."). With the
+  // fix, re-synced IDs change (e.g. TC-CH--001 → TC-CHM-001), orphaning the old files.
+  if (existingTests.some(t => t.id.includes('--'))) {
+    console.warn('[pmagent] NOTE: existing IDs contain "--" (legacy slug bug). Re-sync will re-key them; delete orphaned old-ID .md files under ' + projectDir + '/tests after this run.');
+  }
 
   let categoriesCreated = 0;
   let created = 0, updated = 0, untouched = 0, skippedLocked = 0;
@@ -5153,6 +5361,108 @@ button.status-pill.ok:hover { border-color: var(--ok); }
 .tc-row .tc-id { font-family: var(--font-mono); font-size: 11px; color: var(--fg-muted); }
 
 /* ==========================================================================
+   QA split-panel (PMAgent-style: left plan list + right document)
+   ========================================================================== */
+.qa-master {
+  display: flex;
+  height: calc(100vh - 48px - 62px - 56px);
+  border-top: 1px solid var(--border);
+}
+.qa-list {
+  width: 300px; flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  background: var(--bg-sunken);
+}
+.qa-coverage-bar { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.qa-coverage-label {
+  font-size: 10px; color: var(--fg-faint);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  font-family: var(--font-mono); margin-bottom: 6px;
+}
+.qa-bar-track { height: 4px; border-radius: 3px; background: var(--bg-elev-2); overflow: hidden; }
+.qa-bar-fill { height: 100%; border-radius: 3px; transition: width .2s ease; }
+.qa-coverage-summary { font-size: 10px; color: var(--fg-faint); font-family: var(--font-mono); margin-top: 6px; }
+.qa-section-label {
+  font-size: 10px; color: var(--fg-faint);
+  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 10px 14px 4px;
+  display: flex; align-items: center;
+}
+.qa-plan-item {
+  padding: 7px 14px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  border-left: 2px solid transparent;
+}
+.qa-plan-item:hover { background: var(--bg-elev); }
+.qa-plan-item.active { background: var(--bg-elev); border-left-color: var(--accent); }
+.qa-plan-dot { display: inline-flex; flex-shrink: 0; }
+.qa-plan-id { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-faint); flex-shrink: 0; }
+.qa-plan-label {
+  font-size: 12.5px; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.qa-detail { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.qa-detail-empty { align-items: center; justify-content: center; }
+.qa-detail-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+}
+.qa-detail-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.qa-detail-body { padding: 18px 20px; overflow-y: auto; flex: 1; }
+.qa-meta-grid {
+  display: flex; flex-wrap: wrap; gap: 8px 22px;
+  padding-bottom: 16px; margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.qa-meta { display: flex; flex-direction: column; gap: 2px; }
+.qa-meta .k {
+  font-size: 9.5px; color: var(--fg-faint);
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.qa-meta span:last-child { font-size: 12.5px; color: var(--fg); }
+.md-doc { font-size: 13px; line-height: 1.65; color: var(--fg-muted); }
+.md-doc h1, .md-doc h2, .md-doc h3 { color: var(--fg); margin: 18px 0 8px; }
+.md-doc h1 { font-size: 17px; } .md-doc h2 { font-size: 14px; } .md-doc h3 { font-size: 12.5px; }
+.md-doc code { font-family: var(--font-mono); font-size: 11.5px; background: var(--bg-elev); padding: 1px 5px; border-radius: 4px; }
+.md-doc table { border-collapse: collapse; font-size: 12px; margin: 10px 0; }
+.md-doc th, .md-doc td { border: 1px solid var(--border); padding: 5px 9px; text-align: left; }
+.md-doc th { background: var(--bg-elev); }
+.md-doc ul, .md-doc ol { padding-left: 20px; }
+
+/* Automation Planner (E-028) */
+.ap-chip { font-size: 10px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 10px; }
+.ap-chip b { font-family: var(--font-mono); }
+.ap-row { display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-bottom: 1px solid var(--bg-elev); }
+.ap-row:hover { background: var(--bg-elev); }
+.ap-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.ap-row-title { font-size: 12.5px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-row-meta { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--fg-faint); margin-top: 2px; }
+.ap-select { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; padding: 3px 5px; cursor: pointer; }
+.ap-flow { border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px; cursor: pointer; }
+.ap-flow:hover { border-color: var(--border-strong); }
+.ap-flow.active { border-color: var(--accent); background: var(--bg-elev); }
+.ap-flow-head { display: flex; align-items: center; gap: 8px; }
+.ap-flow-id { font-size: 11px; color: var(--fg-faint); }
+.ap-flow-name { font-size: 13.5px; font-weight: 600; flex: 1; }
+.ap-flow-status { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 9px; border: 1px solid var(--border); color: var(--fg-faint); }
+.ap-flow-status[data-st="passing"] { color: #45E0A8; border-color: #45E0A8; }
+.ap-flow-status[data-st="written"] { color: #3B82F6; border-color: #3B82F6; }
+.ap-flow-status[data-st="scaffolded"] { color: #F5A623; border-color: #F5A623; }
+.ap-flow-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+.ap-flow-rat { font-size: 11.5px; color: var(--fg-muted); margin-top: 7px; line-height: 1.5; }
+.ap-tc { font-size: 9.5px; color: var(--fg-faint); background: var(--bg-elev); padding: 1px 5px; border-radius: 4px; }
+.ap-blocker { font-size: 11px; color: #F5A623; margin-top: 8px; }
+.ap-legend { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 7px; }
+.ap-legend-row { display: flex; gap: 8px; font-size: 11px; }
+.ap-legend-key { color: var(--fg); font-weight: 600; min-width: 110px; }
+.ap-legend-meta { color: var(--fg-muted); }
+.ap-legend-meta code { font-family: var(--font-mono); font-size: 10px; color: var(--accent); }
+.ap-draft { margin-top: 8px; font-size: 11px; }
+.ap-draft summary { cursor: pointer; color: var(--fg-muted); }
+.ap-yaml { background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5; overflow-x: auto; max-height: 320px; white-space: pre; margin-top: 6px; }
+
+/* ==========================================================================
    Device matrix
    ========================================================================== */
 .matrix {
@@ -6494,6 +6804,108 @@ button.status-pill.ok:hover { border-color: var(--ok); }
 .tc-row .tc-id { font-family: var(--font-mono); font-size: 11px; color: var(--fg-muted); }
 
 /* ==========================================================================
+   QA split-panel (PMAgent-style: left plan list + right document)
+   ========================================================================== */
+.qa-master {
+  display: flex;
+  height: calc(100vh - 48px - 62px - 56px);
+  border-top: 1px solid var(--border);
+}
+.qa-list {
+  width: 300px; flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  background: var(--bg-sunken);
+}
+.qa-coverage-bar { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.qa-coverage-label {
+  font-size: 10px; color: var(--fg-faint);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  font-family: var(--font-mono); margin-bottom: 6px;
+}
+.qa-bar-track { height: 4px; border-radius: 3px; background: var(--bg-elev-2); overflow: hidden; }
+.qa-bar-fill { height: 100%; border-radius: 3px; transition: width .2s ease; }
+.qa-coverage-summary { font-size: 10px; color: var(--fg-faint); font-family: var(--font-mono); margin-top: 6px; }
+.qa-section-label {
+  font-size: 10px; color: var(--fg-faint);
+  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 10px 14px 4px;
+  display: flex; align-items: center;
+}
+.qa-plan-item {
+  padding: 7px 14px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  border-left: 2px solid transparent;
+}
+.qa-plan-item:hover { background: var(--bg-elev); }
+.qa-plan-item.active { background: var(--bg-elev); border-left-color: var(--accent); }
+.qa-plan-dot { display: inline-flex; flex-shrink: 0; }
+.qa-plan-id { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-faint); flex-shrink: 0; }
+.qa-plan-label {
+  font-size: 12.5px; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.qa-detail { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.qa-detail-empty { align-items: center; justify-content: center; }
+.qa-detail-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 20px; border-bottom: 1px solid var(--border);
+}
+.qa-detail-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.qa-detail-body { padding: 18px 20px; overflow-y: auto; flex: 1; }
+.qa-meta-grid {
+  display: flex; flex-wrap: wrap; gap: 8px 22px;
+  padding-bottom: 16px; margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.qa-meta { display: flex; flex-direction: column; gap: 2px; }
+.qa-meta .k {
+  font-size: 9.5px; color: var(--fg-faint);
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.qa-meta span:last-child { font-size: 12.5px; color: var(--fg); }
+.md-doc { font-size: 13px; line-height: 1.65; color: var(--fg-muted); }
+.md-doc h1, .md-doc h2, .md-doc h3 { color: var(--fg); margin: 18px 0 8px; }
+.md-doc h1 { font-size: 17px; } .md-doc h2 { font-size: 14px; } .md-doc h3 { font-size: 12.5px; }
+.md-doc code { font-family: var(--font-mono); font-size: 11.5px; background: var(--bg-elev); padding: 1px 5px; border-radius: 4px; }
+.md-doc table { border-collapse: collapse; font-size: 12px; margin: 10px 0; }
+.md-doc th, .md-doc td { border: 1px solid var(--border); padding: 5px 9px; text-align: left; }
+.md-doc th { background: var(--bg-elev); }
+.md-doc ul, .md-doc ol { padding-left: 20px; }
+
+/* Automation Planner (E-028) */
+.ap-chip { font-size: 10px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 10px; }
+.ap-chip b { font-family: var(--font-mono); }
+.ap-row { display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-bottom: 1px solid var(--bg-elev); }
+.ap-row:hover { background: var(--bg-elev); }
+.ap-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.ap-row-title { font-size: 12.5px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-row-meta { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--fg-faint); margin-top: 2px; }
+.ap-select { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; padding: 3px 5px; cursor: pointer; }
+.ap-flow { border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px; cursor: pointer; }
+.ap-flow:hover { border-color: var(--border-strong); }
+.ap-flow.active { border-color: var(--accent); background: var(--bg-elev); }
+.ap-flow-head { display: flex; align-items: center; gap: 8px; }
+.ap-flow-id { font-size: 11px; color: var(--fg-faint); }
+.ap-flow-name { font-size: 13.5px; font-weight: 600; flex: 1; }
+.ap-flow-status { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 9px; border: 1px solid var(--border); color: var(--fg-faint); }
+.ap-flow-status[data-st="passing"] { color: #45E0A8; border-color: #45E0A8; }
+.ap-flow-status[data-st="written"] { color: #3B82F6; border-color: #3B82F6; }
+.ap-flow-status[data-st="scaffolded"] { color: #F5A623; border-color: #F5A623; }
+.ap-flow-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+.ap-flow-rat { font-size: 11.5px; color: var(--fg-muted); margin-top: 7px; line-height: 1.5; }
+.ap-tc { font-size: 9.5px; color: var(--fg-faint); background: var(--bg-elev); padding: 1px 5px; border-radius: 4px; }
+.ap-blocker { font-size: 11px; color: #F5A623; margin-top: 8px; }
+.ap-legend { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 7px; }
+.ap-legend-row { display: flex; gap: 8px; font-size: 11px; }
+.ap-legend-key { color: var(--fg); font-weight: 600; min-width: 110px; }
+.ap-legend-meta { color: var(--fg-muted); }
+.ap-legend-meta code { font-family: var(--font-mono); font-size: 10px; color: var(--accent); }
+.ap-draft { margin-top: 8px; font-size: 11px; }
+.ap-draft summary { cursor: pointer; color: var(--fg-muted); }
+.ap-yaml { background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5; overflow-x: auto; max-height: 320px; white-space: pre; margin-top: 6px; }
+
+/* ==========================================================================
    Device matrix
    ========================================================================== */
 .matrix {
@@ -7504,30 +7916,29 @@ function TestsView({ onSelectTest, rowMode, setRowMode }) {
   const [typeFilter, setTypeFilter] = vS("All");
   const [query, setQuery] = vS("");
 
-  const cols = [
-    { key:"pass", label:"Pass" },
-    { key:"fail", label:"Fail" },
-    { key:"flaky", label:"Flaky" },
-    { key:"in-progress", label:"In progress" },
-    { key:"not-run", label:"Not run" },
-  ];
+  const [selId, setSelId] = vS(null);
+
   const filtered = TEST_CASES.filter(t =>
     (statusFilter==="All" || t.status===statusFilter) &&
     (typeFilter==="All" || t.type===typeFilter) &&
     (!query || (t.title+" "+t.id).toLowerCase().includes(query.toLowerCase()))
   );
 
-  // grouped[status] = { [catSlug]: [tests] } — preserves category order
-  const grouped = vM(() => {
+  // byCat[catSlug] = [tests] — story plans grouped under their epic
+  const byCat = vM(() => {
     const m = {};
-    cols.forEach(c => { m[c.key] = {}; });
     filtered.forEach(t => {
-      const col = t.status in m ? t.status : "not-run";
-      if (!m[col][t.cat]) m[col][t.cat] = [];
-      m[col][t.cat].push(t);
+      if (!m[t.cat]) m[t.cat] = [];
+      m[t.cat].push(t);
     });
     return m;
   }, [filtered]);
+
+  // Selected plan for the right panel — defaults to the first visible item.
+  const selectedTest = vM(
+    () => filtered.find(t => t.id === selId) || filtered[0] || null,
+    [filtered, selId]
+  );
 
   // Ordered list of categories that actually appear (preserving CATEGORIES order)
   const catOrder = vM(() => {
@@ -7599,69 +8010,383 @@ function TestsView({ onSelectTest, rowMode, setRowMode }) {
           </div>
         </div>
       ) : (
-        <div className="kanban">
-          {cols.map(col => {
-            const colCats = catOrder.filter(c => {
-              const slug = c.slug || c;
-              return grouped[col.key][slug] && grouped[col.key][slug].length > 0;
-            });
-            const totalInCol = Object.values(grouped[col.key]).reduce((s, arr) => s + arr.length, 0);
-            return (
-              <div className="kanban-col" key={col.key}>
-                <div className="kanban-col-head">
-                  <div className="title"><StatusDot status={col.key}/> {col.label} <span className="pill" style={{fontSize:10, padding:"0 5px"}}>{totalInCol}</span></div>
-                  <button className="icon-btn" style={{width:22, height:22}}><Icon.plus/></button>
+        (() => {
+          // Execution coverage: how many visible plans have actually run.
+          const total = filtered.length;
+          const ran = filtered.filter(t => t.status !== "not-run").length;
+          const passCount = filtered.filter(t => t.status === "pass").length;
+          const allPass = total > 0 && passCount === total;
+          const pct = total ? Math.round(ran / total * 100) : 0;
+          // Epics (categories) that actually have visible plans, in registry order.
+          const visibleCats = catOrder.filter(c => (byCat[c.slug || c] || []).length > 0);
+          return (
+            <div className="qa-master">
+              <div className="qa-list">
+                <div className="qa-coverage-bar">
+                  <div className="qa-coverage-label">test coverage</div>
+                  <div className="qa-bar-track">
+                    <div className="qa-bar-fill" style={{width: pct + "%", background: allPass ? "var(--ok)" : "var(--warn)"}}/>
+                  </div>
+                  <div className="qa-coverage-summary">{ran}/{total} run · {passCount} pass</div>
                 </div>
-                <div className="kanban-col-body">
-                  {colCats.length === 0 && (
-                    <div style={{color:"var(--fg-faint)", fontSize:12, padding:"12px 8px", textAlign:"center"}}>—</div>
-                  )}
-                  {colCats.map((cat, ci) => {
-                    const slug = cat.slug || cat;
-                    const catName = cat.name || slug;
-                    const tests = grouped[col.key][slug] || [];
-                    return (
-                      <div className="kanban-cat-section" key={slug}>
-                        <div className="kanban-cat-label">
-                          <span>{catName}</span>
-                          <span className="kanban-cat-count">{tests.length}</span>
-                        </div>
-                        {tests.map(t => {
-                          // E-024 / S-024-007: per-card runner badge — at-a-glance signal that
-                          // distinguishes web tests from mobile tests in the same kanban column.
-                          const cfg = window.MORBIUS?.ACTIVE_PROJECT_CONFIG;
-                          const isWeb = cfg?.projectType === 'web';
-                          const runnerBadge = isWeb
-                            ? <span className="pill" style={{fontSize:10, padding:"1px 6px", color:'#7C5CFF', borderColor:'#7C5CFF'}}>🌐 web</span>
-                            : (cfg?.projectType === 'api'
-                                ? <span className="pill" style={{fontSize:10, padding:"1px 6px", color:'#A8A29E'}}>⚙ api</span>
-                                : <span className="pill" style={{fontSize:10, padding:"1px 6px", color:'#F5A623', borderColor:'#F5A623'}}>📱 mobile</span>);
-                          return (
-                          <div key={t.id} className="tc-card" onClick={()=>onSelectTest(t)}>
-                            <div className="head">
-                              <span className="tc-id">{t.id}</span>
-                              <span className="pill" style={{marginLeft:"auto", fontSize:10, padding:"1px 5px"}}>{t.priority}</span>
-                            </div>
-                            <h4>{t.title}</h4>
-                            <div className="meta">
-                              {runnerBadge}
-                              <span className="pill" style={{fontSize:10, padding:"1px 6px"}}>{t.type}</span>
-                              {!isWeb && t.yaml && <span className="pill accent" style={{fontSize:10, padding:"1px 6px"}}><span className="dot"/>YAML</span>}
-                              <span style={{marginLeft:"auto", fontFamily:"var(--font-mono)", fontSize:10.5, color:"var(--fg-faint)"}}>{t.lastRun}</span>
-                            </div>
-                          </div>
-                          );
-                        })}
+                {visibleCats.length === 0 && (
+                  <div style={{padding:"16px 12px", color:"var(--fg-faint)", fontSize:12.5}}>No test plans match.</div>
+                )}
+                {visibleCats.map(cat => {
+                  const slug = cat.slug || cat;
+                  const catName = cat.name || slug;
+                  const tests = byCat[slug] || [];
+                  return (
+                    <React.Fragment key={slug}>
+                      <div className="qa-section-label">
+                        <span>{catName}</span>
+                        <span style={{color:"var(--fg-faint)", fontWeight:400, marginLeft:4}}>({tests.length})</span>
                       </div>
-                    );
-                  })}
-                </div>
+                      {tests.map(t => (
+                        <div
+                          key={t.id}
+                          className={\`qa-plan-item \${selectedTest && selectedTest.id===t.id ? "active" : ""}\`}
+                          onClick={()=>setSelId(t.id)}
+                        >
+                          <span className="qa-plan-dot"><StatusDot status={t.status}/></span>
+                          <span className="qa-plan-id">{t.id}</span>
+                          <span className="qa-plan-label">{t.title}</span>
+                        </div>
+                      ))}
+                    </React.Fragment>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
+              <TestPlanDetail test={selectedTest} onOpenFull={onSelectTest}/>
+            </div>
+          );
+        })()
       )}
     </React.Fragment>
+  );
+}
+
+// ===== E-028: Automation Planner =====
+// Planning stage: decide which test cases become Maestro flows and how they group,
+// BEFORE any YAML is written. Left = per-case triage; right = proposed feature-area flows.
+const DECISIONS = ["automate", "manual", "blocked", "defer"];
+const DECISION_LABEL = { automate:"Automate", manual:"Manual", blocked:"Blocked", defer:"Defer", untriaged:"—" };
+const DECISION_COLOR = { automate:"#45E0A8", manual:"#888", blocked:"#E5484D", defer:"#F5A623", untriaged:"var(--fg-faint)" };
+
+function AutomationPlanView() {
+  const { CATEGORIES } = window.MORBIUS;
+  const [data, setData] = useState(null);
+  const [selFlowId, setSelFlowId] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [personaFilter, setPersonaFilter] = useState("all");
+  const [showPersonas, setShowPersonas] = useState(false);
+  const [genResult, setGenResult] = useState({});   // flowId -> { yaml, path, error }
+
+  const load = () => fetch('/api/automation-plan').then(r => r.json()).then(setData).catch(() => setData({ error: true }));
+  useEffect(() => { load(); }, []);
+
+  const candFor = (id) => (data.candidates || []).find(c => c.testId === id);
+
+  const setDecision = async (testId, decision) => {
+    setSaving(true);
+    const existing = candFor(testId) || {};
+    await fetch('/api/automation-plan/candidate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...existing, testId, decision }),
+    });
+    await load();
+    setSaving(false);
+  };
+
+  const scaffold = async (flowId) => {
+    setSaving(true);
+    setGenResult(g => ({ ...g, [flowId]: { generating: true } }));
+    try {
+      const r = await fetch('/api/automation-plan/scaffold', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ flowId }),
+      });
+      const j = await r.json();
+      setGenResult(g => ({ ...g, [flowId]: j.ok ? { yaml: j.yaml, path: j.path, ms: j.durationMs } : { error: j.error || 'failed' } }));
+    } catch (e) {
+      setGenResult(g => ({ ...g, [flowId]: { error: String(e) } }));
+    }
+    await load();
+    setSaving(false);
+  };
+
+  if (!data) return <div className="qa-detail qa-detail-empty"><div style={{color:"var(--fg-faint)"}}>Loading plan…</div></div>;
+  if (data.error) return <div className="qa-detail qa-detail-empty"><div style={{color:"var(--fg-faint)"}}>No automation plan yet.</div></div>;
+
+  const s = data.summary || {};
+  const tests = data.tests || [];
+  const flows = data.flows || [];
+  const personas = data.personas || [];
+  const selFlow = flows.find(f => f.id === selFlowId) || flows[0] || null;
+
+  // Group tests by epic/category (preserve CATEGORIES order, then extras)
+  const cats = (() => {
+    const seen = new Set(tests.map(t => t.category));
+    const ordered = CATEGORIES.filter(c => seen.has(c.slug));
+    const extra = [...seen].filter(sl => !ordered.find(c => c.slug === sl));
+    return [...ordered, ...extra.map(sl => ({ slug: sl, name: sl }))];
+  })();
+
+  const personaLabel = (key) => { const p = personas.find(x => x.key === key); return p ? p.label : (key || '—'); };
+  const personaOf = (testId) => { const c = candFor(testId); return c && c.feasibility ? c.feasibility.personaKey : undefined; };
+
+  return (
+    <div className="qa-master">
+      {/* LEFT — triage list */}
+      <div className="qa-list" style={{width:360}}>
+        <div className="qa-coverage-bar">
+          <div className="qa-coverage-label">automation coverage</div>
+          <div className="qa-bar-track">
+            <div className="qa-bar-fill" style={{width:(s.totalTests? Math.round((s.byDecision.automate||0)/s.totalTests*100):0)+"%", background:"#45E0A8"}}/>
+          </div>
+          <div className="qa-coverage-summary">
+            {s.totalTests} cases → {s.totalFlows} flows · {s.automatableNow} now · {s.blockedFlows} blocked
+          </div>
+          <div style={{display:"flex", gap:6, marginTop:8, flexWrap:"wrap"}}>
+            {DECISIONS.map(d => (
+              <span key={d} className="ap-chip" style={{borderColor:DECISION_COLOR[d], color:DECISION_COLOR[d]}}>
+                {DECISION_LABEL[d]} <b>{(s.byDecision && s.byDecision[d]) || 0}</b>
+              </span>
+            ))}
+            <span className="ap-chip" style={{color:"var(--fg-faint)"}}>Untriaged <b>{(s.byDecision && s.byDecision.untriaged) || 0}</b></span>
+          </div>
+          {/* Persona filter + legend */}
+          <div style={{display:"flex", alignItems:"center", gap:8, marginTop:10}}>
+            <span style={{fontSize:10, color:"var(--fg-faint)", textTransform:"uppercase", letterSpacing:"0.08em"}}>Persona</span>
+            <select className="ap-select" value={personaFilter} onChange={e => setPersonaFilter(e.target.value)} style={{flex:1}}>
+              <option value="all">All personas</option>
+              {personas.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+            <button className="btn ghost sm" style={{padding:"2px 8px"}} onClick={() => setShowPersonas(v => !v)}>{showPersonas ? "Hide" : "Legend"}</button>
+          </div>
+          {showPersonas && (
+            <div className="ap-legend">
+              {personas.map(p => (
+                <div key={p.key} className="ap-legend-row">
+                  <span className="ap-legend-key">{p.label}</span>
+                  <span className="ap-legend-meta">
+                    <code>{p.key}</code>{p.programId ? " · program " + p.programId : ""}
+                    {p.notes ? <span style={{display:"block", color:"var(--fg-faint)"}}>{p.notes}</span> : null}
+                    <span style={{display:"block", color:"var(--fg-faint)", fontSize:9.5}}>creds: {Object.values(p.envKeys || {}).join(", ")}</span>
+                  </span>
+                </div>
+              ))}
+              {personas.length === 0 && <div style={{color:"var(--fg-faint)", fontSize:11}}>No personas in config.testAccounts.</div>}
+            </div>
+          )}
+        </div>
+        {cats.map(cat => {
+          const slug = cat.slug || cat;
+          const rows = tests.filter(t => t.category === slug && (personaFilter === "all" || personaOf(t.id) === personaFilter));
+          if (!rows.length) return null;
+          return (
+            <React.Fragment key={slug}>
+              <div className="qa-section-label"><span>{cat.name || slug}</span><span style={{color:"var(--fg-faint)", marginLeft:4}}>({rows.length})</span></div>
+              {rows.map(t => {
+                const c = candFor(t.id);
+                const dec = c ? c.decision : 'untriaged';
+                return (
+                  <div key={t.id} className="ap-row">
+                    <span className="ap-dot" style={{background:DECISION_COLOR[dec]}}/>
+                    <div style={{flex:1, minWidth:0}}>
+                      <div className="ap-row-title">{t.title}</div>
+                      <div className="ap-row-meta">
+                        <span className="mono">{t.id}</span>
+                        <span className="pill" style={{fontSize:9, padding:"0 4px"}}>{t.priority}</span>
+                        {c && c.feasibility && c.feasibility.gatedByConfig && <span title={c.feasibility.gatedByConfig}>🔒</span>}
+                        {c && c.feasibility && c.feasibility.personaKey && <span title={'persona: '+personaLabel(c.feasibility.personaKey)}>👤</span>}
+                        {c && c.feasibility && c.feasibility.selectorRisk === 'high' && <span title="high selector risk">⚠️</span>}
+                        {c && c.feasibility && c.feasibility.destructive && <span title="destructive">🧨</span>}
+                      </div>
+                    </div>
+                    <select className="ap-select" value={dec} disabled={saving}
+                      onChange={e => setDecision(t.id, e.target.value)}
+                      style={{color:DECISION_COLOR[dec]}}>
+                      <option value="untriaged">—</option>
+                      {DECISIONS.map(d => <option key={d} value={d}>{DECISION_LABEL[d]}</option>)}
+                    </select>
+                  </div>
+                );
+              })}
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      {/* RIGHT — proposed flows */}
+      <div className="qa-detail">
+        <div className="qa-detail-head">
+          <h2 style={{flex:1}}>Proposed flows <span className="pill" style={{fontSize:11}}>{flows.length}</span></h2>
+          <span style={{fontSize:11, color:"var(--fg-faint)"}}>Stage 1 — planning. YAML is written last.</span>
+        </div>
+        <div className="qa-detail-body">
+          {(() => {
+            const shown = [...flows].filter(f => personaFilter === "all" || f.personaKey === personaFilter).sort((a,b)=>(a.runOrder||0)-(b.runOrder||0));
+            if (shown.length === 0) return <div style={{color:"var(--fg-faint)", fontSize:13}}>No flows{personaFilter!=="all" ? " for persona “"+personaLabel(personaFilter)+"”" : " planned yet"}.</div>;
+            return (
+            <div style={{display:"flex", flexDirection:"column", gap:10}}>
+            {shown.map(f => {
+              const blocked = (f.blockers || []).length > 0;
+              const gr = genResult[f.id];
+              const ff = (data.flowFiles || {})[f.id];
+              const yamlText = (gr && gr.yaml) || (ff && ff.yaml);
+              const yamlPath = (gr && gr.path) || (ff && ff.path);
+              const isSel = selFlow && selFlow.id === f.id;
+              return (
+                <div key={f.id} className={"ap-flow" + (selFlow && selFlow.id===f.id ? " active":"")} onClick={() => setSelFlowId(f.id)}>
+                  <div className="ap-flow-head">
+                    <span className="mono ap-flow-id">{f.id}</span>
+                    <span className="ap-flow-name">{f.name}</span>
+                    <span className="ap-flow-status" data-st={f.status}>{f.status}</span>
+                  </div>
+                  <div className="ap-flow-meta">
+                    <span className="pill" style={{fontSize:10}}>{f.priority}</span>
+                    <span className="pill" style={{fontSize:10}}>{(f.platforms||[]).join(' · ')}</span>
+                    <span className="pill" style={{fontSize:10}}>👤 {personaLabel(f.personaKey)}</span>
+                    <span style={{fontSize:10.5, color:"var(--fg-faint)"}}>{f.featureArea}</span>
+                  </div>
+                  {f.rationale && <div className="ap-flow-rat">{f.rationale}</div>}
+                  <div style={{display:"flex", gap:4, flexWrap:"wrap", marginTop:6}}>
+                    {(f.testIds||[]).map(id => <span key={id} className="mono ap-tc">{id}</span>)}
+                  </div>
+                  {blocked && <div className="ap-blocker">🔒 Blocked: {f.blockers.join('; ')}</div>}
+                  <div style={{marginTop:8, display:"flex", gap:8, alignItems:"center"}}>
+                    <button className="btn sm" disabled={blocked || saving || (gr && gr.generating)}
+                      onClick={(e) => { e.stopPropagation(); scaffold(f.id); }}>
+                      {gr && gr.generating ? 'Generating…' : blocked ? 'Blocked' : f.status==='planned' ? 'Generate draft (agent) →' : 'Re-generate'}
+                    </button>
+                    {!blocked && <span style={{fontSize:10, color:"var(--fg-faint)"}}>askClaude → draft YAML → run + E-017 heal</span>}
+                  </div>
+                  {gr && gr.error && <div className="ap-blocker" style={{color:"#E5484D"}}>✕ {gr.error}</div>}
+                  {yamlText && (
+                    <details className="ap-draft" open={isSel} onClick={e => e.stopPropagation()}>
+                      <summary>📄 Maestro YAML → <span className="mono">{yamlPath}</span> {gr && gr.ms ? "("+Math.round(gr.ms/1000)+"s)" : ""} · also in the Maestro tab</summary>
+                      <pre className="ap-yaml">{yamlText}</pre>
+                    </details>
+                  )}
+                </div>
+              );
+            })}
+            </div>
+            );
+          })()}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ===== Test plan detail (right panel of the QA split-view) =====
+// Mirrors PMAgent's QAPlanDetail: meta header + full markdown document, with
+// Morbius's execution signal (status, Maestro flow, run history) appended.
+function TestPlanDetail({ test, onOpenFull }) {
+  const { CATEGORIES } = window.MORBIUS;
+  const [detail, setDetail] = useState(null);
+  const [runs, setRuns] = useState(null);
+  const testId = test ? test.id : null;
+
+  useEffect(() => {
+    if (!testId) { setDetail(null); setRuns(null); return; }
+    let cancelled = false;
+    setDetail(null); setRuns(null);
+    (async () => {
+      try {
+        const [dRes, hRes] = await Promise.all([
+          fetch('/api/test/' + encodeURIComponent(testId)),
+          fetch('/api/runs/' + encodeURIComponent(testId) + '/history'),
+        ]);
+        const d = await dRes.json();
+        const h = await hRes.json();
+        if (!cancelled) {
+          setDetail(d && typeof d === 'object' ? d : null);
+          setRuns(Array.isArray(h) ? h : []);
+        }
+      } catch {
+        if (!cancelled) { setDetail(null); setRuns([]); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [testId]);
+
+  if (!test) {
+    return (
+      <div className="qa-detail qa-detail-empty">
+        <div style={{color:"var(--fg-faint)", fontSize:13}}>Select a test plan to view its document.</div>
+      </div>
+    );
+  }
+
+  const fmtTime = (iso) => {
+    if (!iso) return '—';
+    try { return new Date(iso).toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
+    catch { return '—'; }
+  };
+  const catName = (CATEGORIES.find(c => c.slug === test.cat) || {}).name || test.cat;
+  const storyId = (detail && detail.pmagentSource && detail.pmagentSource.storyId)
+    || (detail && Array.isArray(detail.tags) ? (detail.tags.find(t => /^s-/i.test(t)) || '').toUpperCase() : '')
+    || '—';
+  const platforms = detail && Array.isArray(detail.platforms) && detail.platforms.length ? detail.platforms.join(', ') : '—';
+  const bodyHtml = detail && detail.markdownBody ? mdToHtml(detail.markdownBody) : '';
+
+  return (
+    <div className="qa-detail" data-testid="qa-right-panel">
+      <div className="qa-detail-head">
+        <span className="dr-id">{test.id}</span>
+        <StatusPill status={test.status}/>
+        <h2 style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{test.title}</h2>
+        <RunButtons test={test} onRunFinished={() => setRuns(null)}/>
+        {onOpenFull && <button className="btn ghost sm" onClick={() => onOpenFull(test)} title="Open full detail drawer">Full</button>}
+      </div>
+      <div className="qa-detail-body">
+        <div className="qa-meta-grid">
+          <div className="qa-meta"><span className="k">Story</span><span className="mono">{storyId}</span></div>
+          <div className="qa-meta"><span className="k">Epic</span><span>{catName}</span></div>
+          <div className="qa-meta"><span className="k">Scenario</span><span>{test.type}</span></div>
+          <div className="qa-meta"><span className="k">Priority</span><span>{test.priority}</span></div>
+          <div className="qa-meta"><span className="k">Platforms</span><span>{platforms}</span></div>
+        </div>
+
+        {detail === null ? (
+          <div style={{fontSize:12, color:"var(--fg-faint)", padding:"12px 0"}}>Loading…</div>
+        ) : bodyHtml ? (
+          <div className="md-doc" dangerouslySetInnerHTML={{__html: bodyHtml}}/>
+        ) : (
+          <div style={{fontSize:12.5, color:"var(--fg-faint)", padding:"12px 0"}}>No document content.</div>
+        )}
+
+        {detail && detail.maestroHtml && (
+          <section style={{marginTop:18}}>
+            <div className="sec-title">Maestro flow</div>
+            <div className="maestro-flow-host" style={{fontSize:12, lineHeight:1.6}} dangerouslySetInnerHTML={{__html: detail.maestroHtml}}/>
+          </section>
+        )}
+
+        <section style={{marginTop:18}}>
+          <div className="sec-title">Run history{runs ? ' · ' + Math.min(runs.length, 10) : ''}</div>
+          {runs === null ? (
+            <div style={{fontSize:12, color:"var(--fg-faint)"}}>Loading…</div>
+          ) : runs.length === 0 ? (
+            <div style={{fontSize:12, color:"var(--fg-faint)"}}>No runs recorded yet.</div>
+          ) : (
+            <div style={{display:'flex', flexDirection:'column', gap:3}}>
+              {runs.slice(0, 10).map(r => (
+                <div key={r.runId} style={{display:'flex', alignItems:'center', gap:8, padding:"6px 8px", borderRadius:4, background:'var(--bg-elev)'}}>
+                  <StatusDot status={r.status}/>
+                  <span className="mono" style={{fontSize:11, color:'var(--fg-muted)', minWidth:120}}>{fmtTime(r.startTime)}</span>
+                  <span style={{flex:1, fontSize:11.5}}>{r.failingStep || (r.status === 'pass' ? 'All steps passed' : '—')}</span>
+                  <span style={{fontSize:10, color:'var(--fg-faint)', textTransform:'uppercase', letterSpacing:0.5}}>{r.target || r.platform || r.runner || ''}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
+    </div>
   );
 }
 
@@ -11028,8 +11753,9 @@ function Sidebar({ view, setView, onProjectSwitch }) {
     { k:"devices", l:"Devices", ic:Icon.devices, n:devices, kb:"4", showFor: 'mobile' },
     { k:"runs", l:"Runs", ic:Icon.runs, n:null, kb:"5", showFor: 'all' },
     { k:"maestro", l:"Maestro", ic:Icon.maestro, n:MAESTRO_FLOWS.length || null, kb:"6", showFor: 'mobile' },
-    { k:"appmap", l:"App Map", ic:Icon.appmap, n:null, kb:"7", showFor: 'all' },
-    { k:"healing", l:"Healing", ic:Icon.healing, n:null, kb:"8", showFor: 'mobile' },  // E-017 self-healing is Maestro-flow specific
+    { k:"automation-plan", l:"Automation Plan", ic:Icon.spark, n:null, kb:"7", showFor: 'mobile' },  // E-028 planning stage
+    { k:"appmap", l:"App Map", ic:Icon.appmap, n:null, kb:"8", showFor: 'all' },
+    { k:"healing", l:"Healing", ic:Icon.healing, n:null, kb:"9", showFor: 'mobile' },  // E-017 self-healing is Maestro-flow specific
   ];
   const items = allItems.filter(i => i.showFor === 'all' || (isWeb ? i.showFor === 'web' : i.showFor === 'mobile'));
 
@@ -12102,7 +12828,7 @@ function App() {
   const setTheme = (t) => setTweak("theme", t);
 
   aE(() => {
-    const map = {"1":"dashboard","2":"tests","3":"bugs","4":"devices","5":"runs","6":"maestro","7":"settings"};
+    const map = {"1":"dashboard","2":"tests","3":"bugs","4":"devices","5":"runs","6":"maestro","7":"automation-plan","8":"appmap","9":"healing"};
     const h = (e) => {
       // ⌘K / Ctrl+K — open search
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setSearchOpen(s => !s); return; }
@@ -12136,6 +12862,7 @@ function App() {
     devices: { t:"Devices", s:'Coverage across ' + (ACTIVE_PROJECT_CONFIG && ACTIVE_PROJECT_CONFIG.devices ? ACTIVE_PROJECT_CONFIG.devices.length : 4) + ' targets' },
     runs: { t:"Runs", s:"Run trend and history" },
     maestro: { t:"Maestro", s:MAESTRO_FLOWS.length + ' YAML flows · Android + iOS' },
+    "automation-plan": { t:"Automation Plan", s:"Decide which test cases become Maestro flows — before writing YAML" },
     appmap: { t:"App Map", s:"Screen flow for " + projName },
     healing: { t:"Healing Queue", s:"Self-heal proposals from failed Maestro runs" },
     settings: { t:"Settings", s:"Workspace & personal preferences" },
@@ -12215,6 +12942,7 @@ function App() {
   else if (view === "devices") body = <DevicesView key={updateKey}/>;
   else if (view === "runs") body = <RunsView key={updateKey}/>;
   else if (view === "maestro") body = <MaestroView key={updateKey}/>;
+  else if (view === "automation-plan") body = <AutomationPlanView key={updateKey}/>;
   else if (view === "appmap") body = <AppMapView key={updateKey}/>;
   else if (view === "healing") body = <HealingQueueView key={updateKey}/>;
   else if (view === "settings") body = <SettingsView tweaks={tweaks} setTweak={setTweak}/>;

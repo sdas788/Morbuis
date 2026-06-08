@@ -1,6 +1,6 @@
 ---
 name: morbius-run-test
-description: Run a Maestro test flow on a device via Maestro MCP. Handles app launch, env loading, result tracking, and bug creation on failure. Always use mcp__maestro__run_flow_files with the correct path format.
+description: Run a Maestro test flow on a device via Maestro MCP. Handles app launch, env loading, result tracking, and bug creation on failure. Always use mcp__maestro__run with the correct path format.
 user_invocable: true
 ---
 
@@ -9,7 +9,7 @@ user_invocable: true
 Execute a Maestro YAML test flow against a live device/emulator using the Maestro MCP tool.
 
 ## RULE: Always use Maestro MCP, not CLI
-Use `mcp__maestro__run_flow_files` to run flows — it gives live feedback and integrates with the Morbius board. Only fall back to CLI if MCP is unavailable.
+Use `mcp__maestro__run` to run flows — it gives live feedback and integrates with the Morbius board. Only fall back to CLI if MCP is unavailable.
 
 ---
 
@@ -48,9 +48,9 @@ mcp__maestro__list_devices
 
 ### Run a single flow
 ```
-mcp__maestro__run_flow_files
+mcp__maestro__run
   device_id: emulator-5554
-  flow_files: ../STS/sts-testing/Andriod test/flows/01_login.yaml
+  files: ["../STS/sts-testing/Andriod test/flows/01_login.yaml"]
 ```
 
 **Path note:** Maestro MCP prepends `/Users/sdas/Morbius` (the CWD) to all paths.
@@ -60,17 +60,17 @@ mcp__maestro__run_flow_files
 
 ### Run with environment variables
 ```
-mcp__maestro__run_flow_files
+mcp__maestro__run
   device_id: emulator-5554
-  flow_files: ../STS/sts-testing/Andriod test/flows/01_login.yaml
+  files: ["../STS/sts-testing/Andriod test/flows/01_login.yaml"]
   env: { "TEST_USERNAME": "cthomas", "TEST_PASSWORD": "Test1234!" }
 ```
 
 ### Run multiple flows in sequence
 ```
-mcp__maestro__run_flow_files
+mcp__maestro__run
   device_id: emulator-5554
-  flow_files: ../STS/sts-testing/Andriod test/flows/01_login.yaml,../STS/sts-testing/Andriod test/flows/02_calculators_home.yaml
+  files: ["../STS/sts-testing/Andriod test/flows/01_login.yaml", "../STS/sts-testing/Andriod test/flows/02_calculators_home.yaml"]
 ```
 
 ---
@@ -108,7 +108,7 @@ curl -X POST http://localhost:3000/api/test/update \
 
 ### If FAILED
 1. Take a screenshot: `mcp__maestro__take_screenshot`
-2. Inspect screen: `mcp__maestro__inspect_view_hierarchy`
+2. Inspect screen: `mcp__maestro__inspect_screen`
 3. Debug the failing step (see Step 6)
 4. Fix the YAML, re-run the full flow
 5. If it's a real app bug (not test issue), create a bug ticket:
@@ -133,12 +133,12 @@ curl -X POST http://localhost:3000/api/test/update \
 ## Step 6: Debug Failing Flows
 
 1. **See where you are:** `mcp__maestro__take_screenshot`
-2. **See what's available:** `mcp__maestro__inspect_view_hierarchy`
+2. **See what's available:** `mcp__maestro__inspect_screen`
 3. **Test the failing step manually:**
 ```
-mcp__maestro__run_flow
+mcp__maestro__run
   device_id: emulator-5554
-  flow_yaml: |
+  yaml: |
     appId: com.sts.calculator
     ---
     - tapOn: "Log in to your account"
@@ -146,7 +146,7 @@ mcp__maestro__run_flow
         timeout: 5000
 ```
 4. **Fix the selector** in the YAML file
-5. **Re-run the full flow** with `mcp__maestro__run_flow_files`
+5. **Re-run the full flow** with `mcp__maestro__run`
 
 ### Common failures
 

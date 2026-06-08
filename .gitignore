@@ -6,5 +6,8 @@ dist-mac/
 data/**/.sync-meta.json
 data/**/screenshots/
 
+# Road Scholar project config contains a staging test credential — keep local only
+data/road-scholar-mobile/config.json
+
 Users/
 .claude/worktrees/

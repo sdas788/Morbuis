@@ -1,5 +1,5 @@
 {
-  "activeProject": "micro-air",
+  "activeProject": "road-scholar-mobile",
   "projects": [
     {
       "id": "micro-air",
@@ -193,6 +193,35 @@
         }
       ],
       "pmagentSlug": "ch-mobile",
+      "projectType": "mobile"
+    },
+    {
+      "id": "road-scholar-mobile",
+      "name": "Road Scholar Mobile",
+      "created": "2026-05-26",
+      "devices": [
+        {
+          "id": "ipad",
+          "name": "iPad",
+          "platform": "ios"
+        },
+        {
+          "id": "iphone",
+          "name": "iPhone",
+          "platform": "ios"
+        },
+        {
+          "id": "android-tab",
+          "name": "Android Tablet",
+          "platform": "android"
+        },
+        {
+          "id": "android-phone",
+          "name": "Android Phone",
+          "platform": "android"
+        }
+      ],
+      "pmagentSlug": "roadscholar-mobile",
       "projectType": "mobile"
     }
   ]

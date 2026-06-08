@@ -10,6 +10,40 @@ Everything in this document was learned from real failures and fixes during live
 
 ---
 
+## ⚠️ CURRENT-BUILD UPDATE (2026-06) — read this first; it overrides older sections below
+
+Re-validated live against the current Release build (`stsCalculator-staging`, iPhone 17 Pro,
+iOS 26.2). All 8 calculator flows now pass with **zero `point:`/coordinate selectors** — pure
+testID + scroll. Key corrections to the older guidance further down:
+
+1. **ALL calculators are now single-long-scroll** (not the A/B/C split below). Every section's
+   fields live in one continuous vertical scroll. The robust, device-independent pattern is to
+   **`scrollUntilVisible` directly to each field's testID** in order — NO section-tab taps for
+   main sections, NO Categories menu, NO point taps. Proven on all 8 calculators.
+   - Recover from async tab-restore by scrolling **UP** to the first field of section 1
+     (`scrollUntilVisible: { id: <firstField> } direction: UP timeout: 20000-30000`).
+2. **Long intermediate sections need a long scroll.** On SAVR / Multi-Valve / Ascending Aorta,
+   Demographics sits below a big "Previous Cardiac Interventions" section — reach it with
+   `timeout: 30000` + `speed: 60`.
+3. **Do NOT use the Categories bottom-sheet for navigation.** Its rows render as a single
+   flattened accessibility element (no per-row testID), so tapping a row needs a banned
+   coordinate. Scroll-to-field replaces it entirely.
+4. **`btn-back` is NOT in the iOS accessibility tree** on this build (tapOn fails). Do not use it.
+   Omit the cosmetic back-to-home step (the next flow relaunches anyway).
+5. **Patient Summary by testID:** open `id: btn-patient-summary`, close the expanded view with
+   `id: phosphor-react-native-x-bold` (use x-close, not a back tap, in the reopened-summary guard).
+6. **Subsection tabs** (`tab-pulmonary`/`tab-vascular`/`tab-cardiacStatus`/`tab-coronaryArteryDisease`,
+   thoracic `tab-pulmonaryFunction`/`tab-cardiovascularDisease`/`tab-vascularDiseaseHistory`/
+   `tab-kidneyFunction`) are tappable by id once scrolled into view. Valve + Arrhythmia subsection
+   tabs still go off-screen → scroll to field IDs.
+7. **Flow path is `/Users/sdas/STS/sts-testing/ios-test/flows/`** (the `IOS app/flows` path below is
+   stale). Each flow starts with `- runFlow: 01_login.yaml` then `- launchApp`.
+
+Everything below remains useful for field IDs, singleSelectMultiAttribute formats, the overshoot
+trick, and conditional-field avoidance — but for navigation, follow this section.
+
+---
+
 ## Project Reference
 
 | Item | Value |
@@ -278,7 +312,7 @@ for calc in data:
 
 ## Pattern 5: Direct tapOn for Scroll-Top Elements
 
-**The rule**: If `inspect_view_hierarchy` shows an element is already visible at scroll=0%, use `tapOn: id:` directly — NO `scrollUntilVisible` needed. Adding an unnecessary `scrollUntilVisible direction: UP` can cause a rubber-band bounce and leave the view in an unpredictable state.
+**The rule**: If `inspect_screen` shows an element is already visible at scroll=0%, use `tapOn: id:` directly — NO `scrollUntilVisible` needed. Adding an unnecessary `scrollUntilVisible direction: UP` can cause a rubber-band bounce and leave the view in an unpredictable state.
 
 **How to check**: After tapping the section tab, inspect the hierarchy. Look for `"Vertical scroll bar... value=0%"`. If the element's y-coordinate is within 0-874, it's visible without scrolling.
 
@@ -738,7 +772,7 @@ npx react-native start --reset-cache --port 8081
 
 ```
 Flow fails on scrollUntilVisible timeout?
-├── Yes → inspect_view_hierarchy
+├── Yes → inspect_screen
 │   ├── Element not in hierarchy at all?
 │   │   ├── It's a subsection tab (tab-valveDisease / tab-arrhythmia)?
 │   │   │   └── Pattern 8: tab scrolled off-screen. Skip tap, scroll to field ID directly.

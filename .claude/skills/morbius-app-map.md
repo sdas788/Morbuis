@@ -14,17 +14,26 @@ Systematically explore a mobile app and produce a Mermaid flowchart that shows e
 
 ## How to Explore
 
+### Step 0: Surface the Maestro Viewer
+`mcp__maestro__list_devices` returns a Maestro Viewer URL (e.g. `http://127.0.0.1:10002/`). Share it with the user so they can watch the screen as you explore.
+
 ### Step 1: Launch the app fresh
-```bash
-adb shell am force-stop <APP_ID>
-adb shell pm clear <APP_ID>
-adb shell am start -n <APP_ID>/.MainActivity
+Launch via Maestro MCP — cross-platform (Android + iOS) and resolves React Native apps correctly (no hardcoded `.MainActivity`):
 ```
+mcp__maestro__run
+  device_id: emulator-5554
+  yaml: |
+    appId: <APP_ID>
+    ---
+    - launchApp
+```
+> RN note: `launchApp: { clearState: true }` can crash React Native apps. For a truly fresh start, clear state out-of-band first with `adb shell pm clear <APP_ID>` (Android), then plain `- launchApp`.
 
 ### Step 2: Screenshot and document the first screen
+Both tools require `device_id`:
 ```
-mcp__maestro__take_screenshot
-mcp__maestro__inspect_view_hierarchy
+mcp__maestro__take_screenshot   device_id: emulator-5554
+mcp__maestro__inspect_screen    device_id: emulator-5554
 ```
 
 For each screen, record:
@@ -97,8 +106,18 @@ graph TD
 ```
 ```
 
-### 3. Verify on the dashboard
-Start the dashboard → click "App Map" in the sidebar → Mermaid chart renders.
+### 3. Verify on the dashboard (don't skip — Mermaid is fragile)
+- **Confirm the active project first** (`morbius doctor` prints it). The App Map is keyed to the active project — verifying against the wrong one is a silent false-positive.
+- Start/refresh the dashboard → click "App Map" → confirm the SVG renders with the expected node count and **no "syntax error"**. `classDef`, stadium `(["..."])`, and quotes/`<br/>` in labels are the usual breakers.
+
+## Faster path: design reference + live verification
+If the project has a design reference (e.g. PMAgent `reference/design/screens/DS-*.md`), **build the map from those docs** (they enumerate every screen + its navigation edges) and then **verify the reachable screens live** on the device. This is far faster and more complete than blind tapping, especially past an auth wall you can't cross.
+
+## Annotate build-state (critical for honesty)
+A spec'd screen may be **gated in the current build** (feature flag / remote config / "Coming soon"). Mark these so the map reflects reality, not the spec:
+- `✅` live-verified on device · plain = design-derived, not yet reached · `⚠️` present in spec but **gated/not in this build**.
+- Style gated nodes distinctly (e.g. `classDef gated fill:#3a2f1a,stroke:#F5A623`) and add a one-line legend.
+- This feeds the automation plan: gated screens → **blocked-until-config** flows.
 
 ## Tips
 - Don't try to map every possible state — focus on main navigation paths

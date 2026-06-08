@@ -1,0 +1,441 @@
+{
+  "projectId": "road-scholar-mobile",
+  "updatedAt": "2026-06-05T19:28:39.232Z",
+  "candidates": [
+    {
+      "testId": "TC-ROA-001-001-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "no-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-001-002-1",
+      "decision": "defer",
+      "feasibility": {
+        "selectorRisk": "high",
+        "needsBiometric": true
+      }
+    },
+    {
+      "testId": "TC-ROA-001-003-1",
+      "decision": "defer",
+      "feasibility": {
+        "selectorRisk": "high"
+      }
+    },
+    {
+      "testId": "TC-ROA-001-004-1",
+      "decision": "manual",
+      "feasibility": {
+        "selectorRisk": "high"
+      }
+    },
+    {
+      "testId": "TC-ROA-002-002-1",
+      "decision": "blocked",
+      "feasibility": {
+        "selectorRisk": "high",
+        "gatedByConfig": "Firebase allowedGroups",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-002-003-1",
+      "decision": "blocked",
+      "feasibility": {
+        "selectorRisk": "high",
+        "gatedByConfig": "Firebase allowedGroups",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-002-004-1",
+      "decision": "blocked",
+      "feasibility": {
+        "selectorRisk": "high",
+        "gatedByConfig": "Firebase allowedGroups",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-002-005-1",
+      "decision": "blocked",
+      "feasibility": {
+        "selectorRisk": "high",
+        "gatedByConfig": "Firebase allowedGroups",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-002-006-1",
+      "decision": "blocked",
+      "feasibility": {
+        "selectorRisk": "high",
+        "gatedByConfig": "Firebase allowedGroups",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-002-007-1",
+      "decision": "blocked",
+      "feasibility": {
+        "selectorRisk": "high",
+        "gatedByConfig": "Firebase allowedGroups",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-002-008-1",
+      "decision": "blocked",
+      "feasibility": {
+        "selectorRisk": "high",
+        "gatedByConfig": "Firebase allowedGroups",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-002-009-1",
+      "decision": "blocked",
+      "feasibility": {
+        "selectorRisk": "high",
+        "gatedByConfig": "Firebase allowedGroups",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-002-001-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "multi-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-003-001-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-003-002-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-003-003-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-003-004-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-004-001-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "group-leader"
+      }
+    },
+    {
+      "testId": "TC-ROA-004-002-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "group-leader"
+      }
+    },
+    {
+      "testId": "TC-ROA-004-003-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "group-leader"
+      }
+    },
+    {
+      "testId": "TC-ROA-005-001-1",
+      "decision": "manual",
+      "feasibility": {
+        "selectorRisk": "high"
+      }
+    },
+    {
+      "testId": "TC-ROA-005-002-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-005-003-1",
+      "decision": "defer",
+      "feasibility": {
+        "selectorRisk": "high"
+      }
+    },
+    {
+      "testId": "TC-ROA-006-001-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "multi-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-006-002-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "in-group"
+      }
+    },
+    {
+      "testId": "TC-ROA-007-001-1",
+      "decision": "defer",
+      "feasibility": {
+        "selectorRisk": "high"
+      }
+    },
+    {
+      "testId": "TC-ROA-007-002-1",
+      "decision": "defer",
+      "feasibility": {
+        "selectorRisk": "high"
+      }
+    },
+    {
+      "testId": "TC-ROA-007-003-1",
+      "decision": "defer",
+      "feasibility": {
+        "selectorRisk": "high"
+      }
+    },
+    {
+      "testId": "TC-ROA-007-004-1",
+      "decision": "defer",
+      "feasibility": {
+        "selectorRisk": "high"
+      }
+    },
+    {
+      "testId": "TC-ROA-008-001-1",
+      "decision": "automate",
+      "feasibility": {
+        "selectorRisk": "high",
+        "personaKey": "in-group"
+      }
+    }
+  ],
+  "flows": [
+    {
+      "id": "01_login_logout",
+      "name": "Login & Logout (SSO)",
+      "featureArea": "E-001 Auth",
+      "testIds": [
+        "TC-ROA-001-001-1"
+      ],
+      "personaKey": "no-group",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "priority": "P0",
+      "runOrder": 1,
+      "status": "planned",
+      "rationale": "P0 gate — every authenticated flow depends on it. OAuth webview; logout from Settings."
+    },
+    {
+      "id": "02_profile",
+      "name": "Profile view / edit / hobbies / privacy",
+      "featureArea": "E-003 Profile",
+      "testIds": [
+        "TC-ROA-003-001-1",
+        "TC-ROA-003-002-1",
+        "TC-ROA-003-003-1",
+        "TC-ROA-003-004-1"
+      ],
+      "personaKey": "in-group",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "priority": "P1",
+      "runOrder": 2,
+      "status": "written",
+      "rationale": "Fully live, self-contained — best first automation."
+    },
+    {
+      "id": "03_home_group_list",
+      "name": "Home group list + program summary",
+      "featureArea": "E-002/E-006",
+      "testIds": [
+        "TC-ROA-002-001-1",
+        "TC-ROA-006-001-1"
+      ],
+      "personaKey": "multi-group",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "priority": "P1",
+      "runOrder": 3,
+      "status": "planned",
+      "rationale": "Needs an account with 3+ groups. List works even while forum is gated."
+    },
+    {
+      "id": "04_group_leader_tools",
+      "name": "Group leader: search / join / trips / step-down",
+      "featureArea": "E-004",
+      "testIds": [
+        "TC-ROA-004-001-1",
+        "TC-ROA-004-002-1",
+        "TC-ROA-004-003-1"
+      ],
+      "personaKey": "group-leader",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "priority": "P1",
+      "runOrder": 4,
+      "status": "planned",
+      "rationale": "Account is a group leader. Join needs ProgramID 25684."
+    },
+    {
+      "id": "05_settings_notifications",
+      "name": "Settings + notification preferences",
+      "featureArea": "E-008/E-005",
+      "testIds": [
+        "TC-ROA-008-001-1",
+        "TC-ROA-005-002-1"
+      ],
+      "personaKey": "in-group",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "priority": "P2",
+      "runOrder": 5,
+      "status": "planned",
+      "rationale": "Reachable via Profile gear."
+    },
+    {
+      "id": "06_trip_context_browser",
+      "name": "In-app browser / trip context",
+      "featureArea": "E-006",
+      "testIds": [
+        "TC-ROA-006-002-1"
+      ],
+      "personaKey": "in-group",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "priority": "P2",
+      "runOrder": 6,
+      "status": "planned",
+      "rationale": "External link opens in-app browser; assert load only."
+    },
+    {
+      "id": "07_forum_posts",
+      "name": "Forum: create / edit / delete post",
+      "featureArea": "E-002 Community",
+      "testIds": [
+        "TC-ROA-002-002-1",
+        "TC-ROA-002-003-1",
+        "TC-ROA-002-004-1"
+      ],
+      "personaKey": "in-group",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "priority": "P1",
+      "runOrder": 7,
+      "status": "planned",
+      "blockers": [
+        "Firebase allowedGroups: add test group ID to unblock forum"
+      ],
+      "rationale": "Forum code ships but is gated by remote config."
+    },
+    {
+      "id": "08_forum_engagement",
+      "name": "Forum: comments / likes / mentions",
+      "featureArea": "E-002 Community",
+      "testIds": [
+        "TC-ROA-002-005-1",
+        "TC-ROA-002-006-1",
+        "TC-ROA-002-007-1"
+      ],
+      "personaKey": "in-group",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "priority": "P1",
+      "runOrder": 8,
+      "status": "planned",
+      "blockers": [
+        "Firebase allowedGroups: add test group ID"
+      ],
+      "rationale": "Mentions/report need a 2nd account (on-trip)."
+    },
+    {
+      "id": "09_media_gallery",
+      "name": "Media gallery",
+      "featureArea": "E-002 Community",
+      "testIds": [
+        "TC-ROA-002-008-1"
+      ],
+      "personaKey": "in-group",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "priority": "P2",
+      "runOrder": 9,
+      "status": "planned",
+      "blockers": [
+        "Firebase allowedGroups: add test group ID"
+      ],
+      "rationale": "Photo gallery tab inside an open group."
+    },
+    {
+      "id": "10_report_abuse",
+      "name": "Report abuse",
+      "featureArea": "E-002 Community",
+      "testIds": [
+        "TC-ROA-002-009-1"
+      ],
+      "personaKey": "in-group",
+      "platforms": [
+        "android",
+        "ios"
+      ],
+      "priority": "P2",
+      "runOrder": 10,
+      "status": "planned",
+      "blockers": [
+        "Firebase allowedGroups: add test group ID"
+      ],
+      "rationale": "Needs a 2nd account to report another user’s post."
+    }
+  ]
+}

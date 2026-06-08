@@ -65,6 +65,20 @@ node dist/index.js import "<EXCEL_PATH>"
 
 This reads every sheet from the Excel, creates markdown files per test case, organized by category.
 
+> **PMAgent projects:** if this project comes from PMAgent, skip Steps 2-3 and run `node dist/index.js pmagent-sync <slug>` instead — it imports the test cases AND now writes a `config.json` stub automatically. Onboarding then = filling in `appId`, `maestro` paths, and `testAccounts` (Step 3b) in that stub.
+
+## Step 3b: Register test personas (testAccounts)
+
+Most real test plans need different account states (logged-out, in-a-group, group-leader, second account for multi-user checks). Model them once as `config.testAccounts` so flows bind a persona instead of hardcoding creds. **Store env-var NAMES only — never paste passwords into config.json or the plan.**
+
+```jsonc
+"testAccounts": [
+  { "key": "in-group", "label": "In a group", "envKeys": { "email": "RS_INGROUP_EMAIL", "password": "RS_INGROUP_PASSWORD" } },
+  { "key": "group-leader", "label": "Group leader", "envKeys": { "email": "RS_LEADER_EMAIL", "password": "RS_LEADER_PASSWORD" }, "programId": "25684" }
+]
+```
+Put the actual values in `config.json` `env` (or a secrets store) under those names. The Automation Plan board's persona filter + `morbius doctor` persona-integrity check read this registry.
+
 ## Step 4: Link Maestro YAML Flows
 
 ```bash
@@ -89,8 +103,11 @@ node dist/index.js serve --port 3000
 
 Open http://localhost:3000 — the new project is ready.
 
+## Step 7: Decide what to automate
+Run `morbius doctor` (catches a missing config.json, stale skills, scenario mislabels), then the **`morbius-automation-plan`** skill to derive the plan from the test cases + app map. That's the next stage of the harness — see `requirements/HARNESS.md`.
+
 ## Key Rules
-- Only automate **Happy Path** and **Flow** scenarios (not Detour/Negative/Edge Case)
+- **Don't trust the `scenario` field** to decide what to automate — it can be mislabelled on import/sync. Decide via the `morbius-automation-plan` framework (priority + AC + journey).
 - Target **Android Phone** and **iPhone** only (not tablets for now)
 - Use **text-based selectors** in Maestro YAML (never pixel `point:` selectors)
 - Create **shared flows** for login/logout/navigation (reused across tests)

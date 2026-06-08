@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import { startServer } from './server.js';
 import { importExcel, exportToExcel } from './parsers/excel.js';
 import { parseMaestroOutput } from './parsers/maestro-results.js';
-import { writeBug, loadAllTestCases, loadAllBugs, loadProjectRegistry, getDataDir } from './parsers/markdown.js';
+import { writeBug, loadAllTestCases, loadAllBugs, loadProjectRegistry, getDataDir, loadProjectConfig, loadAutomationPlan } from './parsers/markdown.js';
 import { analyzeSelectors } from './analyzer.js';
 import { parseMaestroYaml } from './parsers/maestro-yaml.js';
 import yaml from 'js-yaml';
@@ -682,6 +682,80 @@ program
       console.error(`  Hint: is the Morbius server running on port ${port}?`);
       process.exit(1);
     }
+  });
+
+// ── harness self-check ────────────────────────────────────────────────────
+program
+  .command('doctor')
+  .description('Harness health check — stale skills, onboarding, scenario/ID hygiene, persona integrity')
+  .action(() => {
+    const registry = loadProjectRegistry();
+    const projectId = registry.activeProject || '(none)';
+    const dir = getActiveDataDir();
+    let problems = 0, warns = 0;
+    const bad = (m: string) => { console.log('  ✗ ' + m); problems++; };
+    const warn = (m: string) => { console.log('  ⚠ ' + m); warns++; };
+    const ok = (m: string) => console.log('  ✓ ' + m);
+
+    console.log('\n  Morbius harness doctor');
+    console.log('  ──────────────────────');
+    // 1. Active project — print loudly (drift caused a false-positive verification this session)
+    console.log('  Active project: ' + projectId + '   (' + dir + ')\n');
+
+    // 2. Stale Maestro MCP tool names in skills (the mistake that broke 4 skills)
+    const DEAD = ['inspect_view_hierarchy', 'run_flow_files', 'run_flow', 'tap_on', 'launch_app'];
+    const skillsDir = path.join(process.cwd(), '.claude', 'skills');
+    if (fs.existsSync(skillsDir)) {
+      let hits = 0;
+      for (const f of fs.readdirSync(skillsDir).filter(s => s.endsWith('.md'))) {
+        const lines = fs.readFileSync(path.join(skillsDir, f), 'utf-8').split('\n');
+        lines.forEach((ln, i) => {
+          for (const d of DEAD) {
+            // match the dead tool name but not the current valid ones (run, inspect_screen)
+            const re = new RegExp('mcp__maestro__' + d + '\\b|\\b' + d + '\\b');
+            if (re.test(ln)) { bad('stale Maestro tool "' + d + '" in .claude/skills/' + f + ':' + (i + 1)); hits++; }
+          }
+        });
+      }
+      if (hits === 0) ok('skills use current Maestro MCP vocabulary (run / inspect_screen)');
+    } else warn('no .claude/skills directory found');
+
+    // 3. Onboarding — active project has config.json with appId + maestro paths
+    const cfg = loadProjectConfig(projectId);
+    if (!cfg) bad('project "' + projectId + '" has no config.json (run onboarding / pmagent-sync)');
+    else {
+      if (!cfg.appId) warn('config.json: appId is empty (mobile runs/app-map need it)');
+      if (!cfg.maestro || (!cfg.maestro.androidPath && !cfg.maestro.iosPath)) warn('config.json: no Maestro paths set (flows have nowhere to live)');
+      if (cfg.appId && cfg.maestro && (cfg.maestro.androidPath || cfg.maestro.iosPath)) ok('project onboarded (appId + maestro path present)');
+    }
+
+    // 4 & 5. Per-test hygiene: scenario distribution + ID dashes
+    const tests = loadAllTestCases(dir);
+    if (tests.length) {
+      const dd = tests.filter(t => t.id.includes('--'));
+      if (dd.length) bad(dd.length + ' test ID(s) contain "--" (legacy slug bug) e.g. ' + dd[0].id);
+      else ok('test IDs are clean (no "--")');
+      const counts: Record<string, number> = {};
+      tests.forEach(t => { counts[t.scenario] = (counts[t.scenario] || 0) + 1; });
+      const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+      if (top && top[1] / tests.length > 0.8) warn('scenario "' + top[0] + '" is ' + Math.round(top[1] / tests.length * 100) + '% of cases — likely a sync mislabel (triage on priority/AC, not scenario)');
+      else ok('scenario distribution looks realistic');
+    } else warn('no test cases loaded for active project');
+
+    // 6. Persona integrity — every personaKey used by the plan exists in config.testAccounts
+    const plan = loadAutomationPlan(projectId);
+    if (plan) {
+      const known = new Set((cfg?.testAccounts || []).map(p => p.key));
+      const used = new Set<string>();
+      plan.flows.forEach(f => { if (f.personaKey) used.add(f.personaKey); });
+      plan.candidates.forEach(c => { if (c.feasibility?.personaKey) used.add(c.feasibility.personaKey); });
+      const missing = [...used].filter(k => !known.has(k));
+      if (missing.length) bad('automation-plan references personas not in config.testAccounts: ' + missing.join(', '));
+      else if (used.size) ok('persona integrity OK (' + used.size + ' personas, all registered)');
+    }
+
+    console.log('\n  ' + (problems ? '✗ ' + problems + ' problem(s)' : '✓ no problems') + (warns ? ', ' + warns + ' warning(s)' : '') + '\n');
+    if (problems) process.exit(1);
   });
 
 program.parse();

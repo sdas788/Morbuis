@@ -405,6 +405,65 @@ export interface ProjectConfig {
   // 'api' is reserved (no v1 runner yet — falls back to manual status).
   projectType?: 'mobile' | 'web' | 'api';
   webUrl?: string;               // base URL for web-app runs, e.g. http://localhost:9000
+  // E-028 / Automation Planner: persona registry. Credential VALUES live in `env`
+  // (or secrets) keyed by the env-var names referenced here — never inline here.
+  testAccounts?: TestPersona[];
+}
+
+// ===== E-028: Automation Planner =====
+// A reusable test persona (from the project's credentials matrix). Stores env-var
+// NAMES only; the actual email/password live in ProjectConfig.env / secrets.
+export interface TestPersona {
+  key: string;                          // 'no-group' | 'in-group' | 'group-leader' | ...
+  label: string;                        // human label
+  envKeys: Record<string, string>;      // e.g. { email: 'RS_LEADER_EMAIL', password: 'RS_LEADER_PASSWORD' }
+  programId?: string;                   // e.g. join-group program number
+  notes?: string;
+}
+
+export type AutomationDecision = 'automate' | 'manual' | 'blocked' | 'defer';
+
+export interface FeasibilitySignals {
+  selectorRisk?: 'low' | 'med' | 'high';
+  gatedByConfig?: string;               // e.g. "Firebase allowedGroups"
+  needsOtp?: boolean;
+  needsBiometric?: boolean;
+  externalWebview?: boolean;
+  destructive?: boolean;
+  personaKey?: string;                  // persona required for this case
+}
+
+// Per-test-case triage decision.
+export interface AutomationCandidate {
+  testId: string;
+  decision: AutomationDecision;
+  reason?: string;
+  flowId?: string;                      // ProposedFlow.id this case is grouped into
+  feasibility?: FeasibilitySignals;
+}
+
+export type ProposedFlowStatus = 'planned' | 'scaffolded' | 'written' | 'passing';
+
+// A planned feature-area Maestro flow (groups many test cases). Becomes a YAML file in Stage 2.
+export interface ProposedFlow {
+  id: string;                           // e.g. "02_profile" → eventual YAML filename
+  name: string;
+  featureArea: string;                  // epic / journey
+  testIds: string[];                    // covered test-case IDs
+  personaKey?: string;
+  platforms: string[];                  // ['android','ios']
+  priority: Priority | 'P0';
+  runOrder: number;
+  status: ProposedFlowStatus;
+  blockers?: string[];
+  rationale?: string;
+}
+
+export interface AutomationPlan {
+  projectId: string;
+  updatedAt: string;
+  candidates: AutomationCandidate[];
+  flows: ProposedFlow[];
 }
 
 export type ProjectType = 'mobile' | 'web' | 'api';

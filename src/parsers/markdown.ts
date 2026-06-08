@@ -461,6 +461,32 @@ export function loadAllTestCases(dataDir?: string): TestCase[] {
   return tests;
 }
 
+// Locate the source .md file for a test case by its frontmatter id.
+export function findTestCaseFilePath(id: string, dataDir?: string): string | null {
+  const testsDir = path.join(dataDir ?? BASE_DATA_DIR, 'tests');
+  if (!fs.existsSync(testsDir)) return null;
+  for (const cat of fs.readdirSync(testsDir, { withFileTypes: true })) {
+    if (!cat.isDirectory()) continue;
+    const catDir = path.join(testsDir, cat.name);
+    for (const file of fs.readdirSync(catDir).filter(f => f.endsWith('.md'))) {
+      const fp = path.join(catDir, file);
+      try {
+        const { data } = matter(fs.readFileSync(fp, 'utf-8'));
+        if ((data.id ?? '') === id) return fp;
+      } catch { /* skip malformed */ }
+    }
+  }
+  return null;
+}
+
+// Raw markdown body (frontmatter stripped) for a test case — preserves sections
+// the structured parser drops (Scope, Prerequisites, AC Coverage Map, etc.).
+export function loadTestCaseMarkdownBody(id: string, dataDir?: string): string {
+  const fp = findTestCaseFilePath(id, dataDir);
+  if (!fp) return '';
+  try { return matter(fs.readFileSync(fp, 'utf-8')).content.trim(); } catch { return ''; }
+}
+
 export function loadAllBugs(dataDir?: string): Bug[] {
   const bugsDir = path.join(dataDir ?? BASE_DATA_DIR, 'bugs');
   if (!fs.existsSync(bugsDir)) return [];
@@ -832,6 +858,24 @@ export function saveProjectConfig(config: import('../types.js').ProjectConfig): 
   fs.mkdirSync(path.join(projectDir, 'runs'), { recursive: true });
   fs.mkdirSync(path.join(projectDir, 'screenshots'), { recursive: true });
   fs.writeFileSync(path.join(projectDir, 'config.json'), JSON.stringify(config, null, 2), 'utf-8');
+}
+
+// --- E-028: Automation Planner persistence ---
+
+export function loadAutomationPlan(projectId: string): import('../types.js').AutomationPlan | null {
+  const planPath = path.join(BASE_DATA_DIR, projectId, 'automation-plan.json');
+  if (!fs.existsSync(planPath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(planPath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+export function saveAutomationPlan(plan: import('../types.js').AutomationPlan): void {
+  const projectDir = path.join(BASE_DATA_DIR, plan.projectId);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'automation-plan.json'), JSON.stringify(plan, null, 2), 'utf-8');
 }
 
 // --- Helpers ---

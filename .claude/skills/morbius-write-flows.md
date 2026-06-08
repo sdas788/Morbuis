@@ -8,25 +8,34 @@ user_invocable: true
 
 You write Maestro YAML test flows by **exploring the real app first**, writing flows based on what you actually see, then **immediately running each flow in full via Maestro MCP** before moving on.
 
-## RULE: Write → Test → Fix → Next
-**Never write a flow and move on without testing it.** After writing any flow file, you MUST run it using `mcp__maestro__run_flow_files` in one complete execution. Do not loop step-by-step. Do not skip testing. Do not batch writes and test later.
+## RULE: Write → Run → Heal → Next (the harness loop)
+**Never write a flow and move on without running it.** After writing any flow file, you MUST run it using `mcp__maestro__run` in one complete execution. Do not loop step-by-step. Do not skip testing. Do not batch writes and test later.
 
 ```
 For EVERY flow file written:
-  1. Write the complete YAML
-  2. Run it: mcp__maestro__run_flow_files (absolute path, full flow)
+  1. Write the complete YAML (selectors from LIVE inspect_screen, not guessed)
+  2. Run it: mcp__maestro__run (absolute path, full flow)
   3. Take screenshot to confirm result
-  4. Fix any failures
+  4. On a selector miss → that's the self-healing case (E-017): the run failure
+     routes to the Healing queue, which proposes a replacement selector. Apply it,
+     OR fix the selector yourself from inspect_screen.
   5. Re-run after fix to confirm pass
   6. Only then move to the next flow
 ```
 
+> **Selector reality:** many apps (e.g. Road Scholar) set **zero testIDs** — you'll rely on `text:`/`id:` (resource-id), and some selectors WILL miss. That's expected; the heal loop is the safety net. Author from `inspect_screen` output (verbatim text), never from a screenshot.
+>
+> **Server-triggered runs:** the dashboard runs flows by spawning an agentic `claude` with the Maestro MCP (`/api/test/run-mcp` precedent) — the same capability you have. A blind headless one-shot (`claude --print` for text only) can't explore the device, so it produces weak selectors; always author with live MCP exploration.
+
 ---
 
 ## Before You Start
-1. Run the `morbius-preflight` skill to verify Maestro, MCP, and devices are ready
-2. List connected devices: `mcp__maestro__list_devices`
-3. If pre-flight fails, resolve before proceeding
+1. **Read the Automation Plan first (Stage 0).** Check `data/<project>/automation-plan.json` — the planning stage (Automation Plan tab) already decided which test cases to automate, how they group into feature-area flows, the persona/account each flow uses, run-order, and any blockers. **Write flows from that plan; do not re-decide.** Only flows with `status: "scaffolded"` and no `blockers` are ready to write. Bind each flow's `personaKey` to the matching `config.testAccounts` entry (use its `envKeys` for `${ENV}` interpolation — never inline credentials).
+2. Run the `morbius-preflight` skill to verify Maestro, MCP, and devices are ready
+3. List connected devices: `mcp__maestro__list_devices`
+4. If pre-flight fails, resolve before proceeding
+
+> If `automation-plan.json` doesn't exist yet, the decision hasn't been made — go to the **Automation Plan** tab in the dashboard first. The framework below is how that plan is built; honor it rather than improvising at write-time.
 
 ---
 
@@ -68,23 +77,28 @@ Delete flows use `DESTROY_EMAIL` — a throwaway account. Never the main test ac
 Before writing a single YAML line, systematically explore every screen:
 
 ### 1. Launch the app
-```bash
-export PATH="$PATH:$HOME/Library/Android/sdk/platform-tools"
-adb shell am force-stop <APP_ID>
-adb shell am start -n <APP_ID>/.MainActivity
+Launch via Maestro MCP (cross-platform, RN-safe — no hardcoded `.MainActivity`):
 ```
+mcp__maestro__run
+  device_id: emulator-5554
+  yaml: |
+    appId: <APP_ID>
+    ---
+    - launchApp
+```
+First call `mcp__maestro__list_devices` and share the returned Maestro Viewer URL with the user.
 
 ### 2. Screenshot every screen
-Use `mcp__maestro__take_screenshot` at each screen.
+Use `mcp__maestro__take_screenshot` (with `device_id`) at each screen.
 
 ### 3. Inspect the view hierarchy
-Use `mcp__maestro__inspect_view_hierarchy` to discover element IDs, text content, clickable elements.
+Use `mcp__maestro__inspect_screen` to discover element IDs, text content, clickable elements.
 
 ### 4. Map the navigation
 Document what you find — tabs, menus, sub-screens, modals.
 
 ### 5. Test taps interactively
-Use `mcp__maestro__tap_on` and `mcp__maestro__run_flow` to verify selectors work before writing YAML.
+Use `mcp__maestro__run` with a short inline `yaml` (e.g. a single `tapOn:` command) to verify selectors before writing the full flow.
 
 ---
 
@@ -136,9 +150,9 @@ After writing each flow, run it immediately. **Do not skip this step.**
 
 ### Run via Maestro MCP (preferred)
 ```
-mcp__maestro__run_flow_files
+mcp__maestro__run
   device_id: emulator-5554          # Android emulator
-  flow_files: ../STS/sts-testing/Andriod test/flows/01_login.yaml
+  files: ["../STS/sts-testing/Andriod test/flows/01_login.yaml"]
   # Note: MCP prepends CWD (/Users/sdas/Morbius). Use relative paths from there.
   # Or use absolute path but strip the leading / (known MCP quirk)
 ```
@@ -165,10 +179,10 @@ mcp__maestro__run_flow_files
 When a flow fails, debug interactively — don't rewrite from scratch.
 
 1. **See where you are:** `mcp__maestro__take_screenshot`
-2. **See what's on screen:** `mcp__maestro__inspect_view_hierarchy`
-3. **Test the failing step manually:** `mcp__maestro__run_flow` with just that command
+2. **See what's on screen:** `mcp__maestro__inspect_screen`
+3. **Test the failing step manually:** `mcp__maestro__run` with just that command
 4. **Fix the selector** in the YAML
-5. **Re-run the full flow** with `mcp__maestro__run_flow_files`
+5. **Re-run the full flow** with `mcp__maestro__run`
 
 | Error | Cause | Fix |
 |-------|-------|-----|

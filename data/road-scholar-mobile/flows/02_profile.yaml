@@ -1,0 +1,144 @@
+appId: com.roadscholar.mobile.dev
+---
+# 02_profile — Profile view / edit / hobbies / privacy
+# Persona: smcqueen (in-group)
+# Covers: TC-003-001-001 | TC-003-002-001 | TC-003-003-001 | TC-003-004-001
+
+- stopApp
+- clearState
+- launchApp
+
+# ── Authentication ──────────────────────────────────────────────────────────
+- extendedWaitUntil:
+    visible:
+      text: "Log in"
+    timeout: 15000
+- tapOn:
+    text: "Log in"
+- extendedWaitUntil:
+    visible:
+      text: "Email"
+    timeout: 15000
+- tapOn:
+    text: "Email"
+- inputText: ${RS_INGROUP_EMAIL}
+- tapOn:
+    text: "Password"
+- inputText: ${RS_INGROUP_PASSWORD}
+- tapOn:
+    text: "Log In"
+- extendedWaitUntil:
+    visible:
+      text: "Current"
+    timeout: 25000
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QA Plan ID: TC-003-001-001
+# Navigate to own Profile — all fields visible; own-profile ignores privacy (AC-001, AC-002)
+# ═══════════════════════════════════════════════════════════════════════════
+- tapOn:
+    id: "profile-icon"
+- extendedWaitUntil:
+    visible:
+      text: "Edit Profile"
+    timeout: 10000
+- assertVisible:
+    text: "Edit Profile"
+- scrollUntilVisible:
+    element:
+      text: "Bio"
+    direction: DOWN
+    timeout: 5000
+- assertVisible:
+    text: "Bio"
+- scrollUntilVisible:
+    element:
+      text: "Email"
+    direction: DOWN
+    timeout: 5000
+- assertVisible:
+    text: "Email"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QA Plan ID: TC-003-002-001
+# Edit bio → save → updated bio immediately reflected on Profile screen (AC-001)
+# ═══════════════════════════════════════════════════════════════════════════
+- tapOn:
+    text: "Edit Profile"
+- extendedWaitUntil:
+    visible:
+      text: "Bio"
+    timeout: 10000
+- tapOn:
+    id: "bio-input"
+- clearText
+- inputText: "Maestro automation bio update"
+- tapOn:
+    text: "Save"
+- extendedWaitUntil:
+    visible:
+      text: "Maestro automation bio update"
+    timeout: 15000
+- assertVisible:
+    text: "Maestro automation bio update"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QA Plan ID: TC-003-003-001
+# Edit Hobbies: pre-existing selections pre-selected; add one hobby → 3 on Profile (AC-001, AC-002)
+# ═══════════════════════════════════════════════════════════════════════════
+- scrollUntilVisible:
+    element:
+      text: "Hobbies"
+    direction: DOWN
+    timeout: 5000
+- tapOn:
+    text: "Edit Hobbies"
+- extendedWaitUntil:
+    visible:
+      text: "Hobbies"
+    timeout: 10000
+# Two hobbies pre-saved in Verint must appear pre-selected (highlighted/checked)
+- assertVisible:
+    id: "hobby-selected"
+# Select one additional hobby to reach total of 3
+- scrollUntilVisible:
+    element:
+      text: "Reading"
+    direction: DOWN
+    timeout: 5000
+- tapOn:
+    text: "Reading"
+- tapOn:
+    text: "Save"
+- extendedWaitUntil:
+    visible:
+      text: "Hobbies"
+    timeout: 10000
+- assertVisible:
+    text: "Reading"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QA Plan ID: TC-003-004-001
+# Privacy: toggle "Show Email" off → auto-saves immediately, no Save tap needed (AC-001, AC-003)
+# ═══════════════════════════════════════════════════════════════════════════
+- scrollUntilVisible:
+    element:
+      text: "Privacy"
+    direction: DOWN
+    timeout: 5000
+- tapOn:
+    text: "Privacy"
+- extendedWaitUntil:
+    visible:
+      text: "Show Email"
+    timeout: 10000
+- assertVisible:
+    text: "Show Email"
+# Toggle off — change must persist with no Save button required (AC-003)
+- tapOn:
+    text: "Show Email"
+- assertNotVisible:
+    text: "Save"
+# Restore toggle so test state is clean for subsequent runs
+- tapOn:
+    text: "Show Email"

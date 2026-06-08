@@ -56,12 +56,18 @@ adb shell pm list packages 2>/dev/null | grep <APP_ID>
 - FAIL: app not installed → "Install the app APK on the emulator first"
 
 ## Check 7: App Launchable
-⚠️ Maestro's `launchApp` does NOT work with React Native apps. Verify via adb:
-```bash
-adb shell am start -n <APP_ID>/.MainActivity 2>&1
+Maestro's `launchApp` **does work** with React Native apps (verified). Launch via Maestro MCP — cross-platform, no hardcoded activity:
 ```
-- PASS: "Starting: Intent..." (no error)
-- FAIL: "Error" → check package name and activity name
+mcp__maestro__run
+  device_id: <id>
+  yaml: |
+    appId: <APP_ID>
+    ---
+    - launchApp
+```
+- PASS: app foregrounds (screenshot/inspect_screen shows its first screen)
+- FAIL: error → check `appId` matches the installed package (`.dev` build variants differ)
+- ⚠️ Do **not** use `launchApp: { clearState: true }` on RN apps — it can crash. For a fresh start use `adb shell pm clear <APP_ID>` first, then plain `- launchApp`.
 
 ## Summary Output
 ```
@@ -94,6 +100,6 @@ Pre-flight Check Results:
 
 | Issue | Cause | Workaround |
 |-------|-------|------------|
-| `launchApp` fails for React Native apps | Maestro can't resolve RN activity | Use `adb shell am start -n <pkg>/.MainActivity` |
+| `launchApp: { clearState: true }` crashes RN apps | clearState inside launchApp is unsafe on RN | Use `adb shell pm clear <APP_ID>` first, then plain `- launchApp` (the 3-step `stopApp → clearState → launchApp` also works in flows) |
 | App ID `.dev` suffix | Build variants have different package names | Check `adb shell pm list packages \| grep <name>` for the real ID |
-| `clearState` then `launchApp` fails | Clearing state removes something RN needs | Skip `clearState` or use `adb shell pm clear` + `adb shell am start` |
+| Maestro instrumentation init fails once after a version bump | cold start / MCP just restarted | Retry once — a plain `launchApp` usually initializes it |

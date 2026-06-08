@@ -14,8 +14,12 @@ Visual Kanban dashboard for Maestro + Codex mobile QA. Reads test cases from Exc
 - `npm start` — run the compiled server
 - `npm run dev` — run with ts-node (development)
 - `morbius serve --port 3000` — start dashboard
+- `morbius doctor` — harness health check (stale skills, onboarding, scenario/ID hygiene, personas)
 - `morbius import <xlsx-path>` — import Excel test cases to markdown
 - `morbius export <xlsx-path>` — export dashboard changes back to Excel
+
+## QA Harness (read first)
+The repeatable pipeline — onboard → app map → automation plan → review → author → run → heal → bug — with each stage's owning skill/CLI and the lessons-turned-guardrails, lives in **`requirements/HARNESS.md`**. Run `morbius doctor` after a sync and before authoring flows.
 
 ## File Structure
 - `src/types.ts` — all TypeScript interfaces

@@ -1,247 +1,266 @@
 # Morbius
 
-A visual QA workspace for teams using Maestro + Claude Code for mobile test automation.
+**A QA harness engine for mobile + web automation.** Orchestrates Maestro flows, runs web tests via Claude + Playwright MCP, self-heals broken selectors, tracks bugs end-to-end, and round-trips test plans with PMAgent. Local-first, file-backed, no database.
 
-Your QA team writes test cases in Excel. Claude Code + Maestro converts them to automated YAML tests. Morbius gives everyone — QA, devs, PMs — a browser-based Kanban board to see what's passing, failing, and needs attention. Edit status, create bugs, add notes, run tests, chat with the agent — all from the browser. No backend. No cloud. Just files.
-
-**Two surfaces, one core:**
-- **Web app** (`src/`) — local-first dashboard, served on `localhost:3000`. The Bet B / SaaS-ready surface.
-- **Mac app** (`morbius-mac/`) — Electron 34, chat-first agentic shell. The Bet C engineer surface (E-001–E-015 shipped; see `morbius-mac/QA-PLAN.md`).
-
----
-
-## How It Works
-
-```
-Excel File ──→ morbius import ──→ Markdown Files ──→ morbius serve ──→ Browser Dashboard
-                                       ↕                                      ↕
-                                 morbius sync ←── Maestro YAML (live)   Edit status, create
-                                       ↓                                bugs, run tests, chat
-                                 morbius export ──→ Changes back to Excel
-```
-
-**Multi-project:** Switch between apps (Micro-Air, STS, Cooper's Hawk, etc.) from the sidebar. Each project has its own test cases, bugs, and Maestro flows.
+> **Two complementary surfaces, one core.**
+> **Web app** (`src/`, served on `localhost:9000`) — team dashboard: test plans, runs, bugs, healing queue, AppMap.
+> **Mac app** (`morbius-mac/`) — chat-first agentic shell for engineers (v0.1 shipped; agent runtime is mocked, swap-in-ready for the Anthropic SDK). See [`morbius-mac/README.md`](morbius-mac/README.md).
+>
+> *Future direction:* web = team board, Mac = engineer driver — they specialize, not duplicate.
 
 ---
 
-## Quick Start
+## Quick start
 
 ```bash
-# 1. Install
+git clone https://github.com/sdas788/Morbuis.git Morbius
 cd Morbius
 npm install
 npm run build
-
-# 2. Import your Excel test plan
-node dist/index.js import "path/to/your/QA Plan.xlsx"
-
-# 3. Link existing Maestro YAML flows
-node dist/index.js sync
-
-# 4. Start the dashboard
-node dist/index.js serve
+node dist/index.js serve --port 9000
 ```
 
-Open **http://localhost:3000** in your browser.
+Open **http://localhost:9000**.
+
+Then bring a project in via **either** of these:
+
+```bash
+# A) Pull a QA plan from a sibling PMAgent project (recommended)
+node dist/index.js pmagent-sync ch-mobile
+
+# B) Import an Excel test plan
+node dist/index.js import "path/to/QA Plan.xlsx"
+```
+
+Switch projects from the sidebar; the active project's tests, bugs, runs, and healing queue load instantly.
 
 ---
 
-## Why 14 Flows, Not 150
+## End-to-end flow
 
-Your Excel QA plan might have 150 test cases across 27 categories. Traditional QA automation would create one YAML file per test case — resulting in 50+ files that are hard to maintain, full of duplicate logic, and confusing for anyone who didn't write them.
+```mermaid
+flowchart LR
+  subgraph SRC["Sources"]
+    PA["PMAgent QA tab<br/>(epics/, T-*.md)"]
+    XLS["Excel QA plan<br/>(.xlsx)"]
+    YML["Existing Maestro YAML"]
+  end
 
-We took a different approach: **one flow per feature area the user actually touches.**
+  subgraph ING["Ingest"]
+    PS["pmagent-sync"]
+    IM["import"]
+    SY["sync"]
+  end
 
-### The problem with one-file-per-test-case
+  DB[("data/&lt;project&gt;/<br/>tests · bugs · runs<br/>healing · screenshots")]
 
-We started with 50 YAML files mirroring the Excel. Here's what happened:
-- 6 files for hub management that all followed the exact same pattern (login → open hub menu → do one thing)
-- 14 files for user management, most of them near-identical login variants
-- 5 files for notification permission variants that differed only by one env variable
-- 14 shared helper files, half of which were only used once
+  subgraph UI["Dashboards"]
+    WEB["Web — split-panel QA<br/>localhost:9000"]
+    MAC["Mac chat shell<br/>morbius-mac"]
+  end
 
-**50 files, and most of them were copy-paste with one line changed.**
+  subgraph EX["Execution"]
+    MAESTRO["Maestro CLI<br/>(Android · iOS)"]
+    WEBR["Claude + Playwright MCP<br/>(web)"]
+  end
 
-### The solution: feature-area flows
+  subgraph FAIL["Failure handling"]
+    CLS["Selector-miss classifier"]
+    HEAL["Healing pipeline<br/>snapshot → Claude propose<br/>→ validate → approve → rewrite YAML"]
+    BUG["Bug auto-create<br/>+ Impact AI + Jira sync"]
+  end
 
-We explored every screen of the actual app on a real emulator, documented the navigation tree, and asked: "What does the user actually do?" The app has 4 tabs and a few key user journeys. That maps to 14 flows.
+  subgraph PUB["Publish back"]
+    PP["pmagent-publish<br/>T-NNN-NNN-*.md"]
+    JIRA["Jira sync<br/>(two-way)"]
+  end
 
-| Flow | What the user does | Test cases covered |
-|------|-------------------|-------------------|
-| **01_login** | Opens app, signs in | TC-2.01 |
-| **02_create_account** | Signs up, fills form, reaches MFA | TC-1.01 |
-| **03_hub_dashboard** | Views hubs, filters, checks sensors | TC-12.01, 10.01 |
-| **04_hub_actions** | Opens hub menu, renames hub (saves), checks alert settings | TC-17.01, 16.01 |
-| **05_add_hub_and_sensor** | Full setup: pair hub via Bluetooth, connect WiFi, update firmware, customize, add sensor | TC-8.01, 9.01 |
-| **05_sensor_actions** | Views sensor detail, renames sensor (saves), checks menu | TC-10.02, 14.01 |
-| **06_notifications** | Views alerts, opens settings, toggles Do Not Disturb, drills into sensor alerts | TC-23.01, 21.01, 13.01 |
-| **07_account** | Views profile, edits name (saves), logs out | TC-5.01, 5.02 |
-| **08_forgot_password** | Taps forgot password, enters email, triggers OTP | TC-3.01 |
-| **09_change_password** | Goes to account, taps change password, triggers OTP | TC-5.03 |
-| **10_subscription** | Upgrades to Pro with sandbox test card | TC-26.02, 5.05 |
-| **11_support** | Navigates to support tab, verifies 4 help links | TC-25.01 |
-| **12_delete_sensor** | Deletes a sensor from a hub (destructive) | TC-15.01 |
-| **13_delete_hub** | Deletes a hub from the account (destructive) | TC-20.01 |
-| **14_delete_account** | Deletes the entire test account (destructive, run last) | TC-4.01 |
+  PA --> PS --> DB
+  XLS --> IM --> DB
+  YML --> SY --> DB
+  DB --> WEB
+  DB --> MAC
+  WEB --> MAESTRO
+  WEB --> WEBR
+  MAESTRO --> DB
+  WEBR --> DB
+  MAESTRO -- fails --> CLS
+  WEBR -- fails --> CLS
+  CLS --> HEAL --> DB
+  CLS --> BUG --> DB
+  DB --> PP --> PA
+  BUG --> JIRA
+  BUG -. "next: selector context<br/>→ heal proposal" .-> HEAL
+```
 
-**14 flows cover 25+ test cases and 85% of all automatable scenarios.** Each flow tests real mutations (rename and save, not just rename and cancel). Each flow runs end-to-end on a real emulator.
-
-### Why this structure works
-
-1. **One file to read per feature.** Want to know how hub management is tested? Read `04_hub_actions.yaml`. That's it. Not 6 files across 3 directories.
-
-2. **Shared login helper eliminates duplication.** Every flow that needs authentication calls `shared/login.yaml`. Login logic lives in one place.
-
-3. **Run order is explicit.** Flows are numbered 01-14. Setup first, verify second, actions third, destructive last. You can run them in sequence and they work.
-
-4. **Environment separation protects test data.** Flows 01-11 use the main test account. Flows 12-14 use a separate `DESTROY_EMAIL` account. You can't accidentally delete production test data.
-
-5. **Extensible without restructuring.** Need to test a new feature? Add `15_new_feature.yaml`. Don't need to touch any existing files.
-
-### What we intentionally skip
-
-- **Detour scenarios** (cancel midway, go back) — low value, high maintenance
-- **Negative scenarios** (wrong password, invalid email) — test manually, they rarely break
-- **Edge cases** (offline mode, timeouts) — hard to simulate reliably in emulators
-- **External webviews** (support links open Chrome) — Maestro can't control them
-
-These represent ~40% of Excel test cases but <5% of real bugs found. The 14 flows focus on the paths users actually take.
+Solid edges are shipped today. The dashed edge from **Bug → Healing** is the next integration (see [Bug tracking](#bug-tracking--the-missing-edge) below).
 
 ---
 
-## What You See
+## Project bootstrap
 
-**Dashboard** — Overall pass rate, category health bars, recent bugs, flaky test alerts. Live status indicators for Maestro CLI, Android, and iOS in the topbar.
+Each project is one entry in `data/projects.json`. Minimal fields:
 
-**Test Cases** — Kanban board by category. Filter by status (Pass, Fail, Flaky, In Progress, Not Run, Has YAML), test type (Happy Path, Flow, Detour, Negative, Edge Case), and sort by ID, Status, Priority, Name, or Type.
+```jsonc
+{
+  "id": "ch-mobile",                           // stable Morbius ID
+  "name": "Cooper's Hawk Mobile",
+  "projectType": "mobile",                     // mobile | web | api
+  "pmagentSlug": "ch-mobile",                  // optional — links to PMAgent project
+  "codebasePath": "https://github.com/org/ch-mobile",  // GitHub URL or local clone — used to locate/generate builds
+  "appId": "com.cooperhawk.app",
+  "webUrl": "http://localhost:3000",           // for web projects only
+  "maestro": {
+    "androidPath": "/path/to/Android test",
+    "iosPath":     "/path/to/IOS app"
+  },
+  "devices": [
+    { "id": "iphone", "name": "iPhone", "platform": "ios" },
+    { "id": "android-phone", "name": "Android Phone", "platform": "android" }
+  ],
+  "env": { "TEST_EMAIL": "", "TEST_PASSWORD": "" },
+  "prerequisites": [
+    "Maestro CLI installed",
+    "Simulator/emulator running",
+    "App build installed on device"
+  ]
+}
+```
 
-**Bugs** — Kanban board: Open, Investigating, Fixed, Closed. Jira bugs sync with a "J" badge alongside local bugs.
+**`codebasePath`** can be a GitHub URL or a local clone. Morbius uses it to locate the app source so test builds can be generated (the STS project uses this today — see `data/projects.json`). Future tooling will trigger builds straight from this field.
 
-**Devices** — Grid showing which tests pass on which devices. Sortable by Test ID, Name, or Pass Rate.
+---
 
-**Runs** — History of test runs with pass/fail counts.
+## Capabilities
 
-**Maestro Tests** — Live view of your Maestro YAML flows, read directly from your local folders. Toggle between Android and iOS. Click a flow to see human-readable steps and the actual YAML code.
+| Area | Status |
+|---|---|
+| PMAgent bidirectional bridge (preview · transfer · publish-test-plans) | ✅ |
+| Self-healing selectors (E-017) | ✅ |
+| Maestro mobile runner (Android + iOS, live WebSocket streaming) | ✅ |
+| Web runner via Claude + Playwright MCP (E-024 — headless and visual modes) | ✅ |
+| Bug tracking + **Bug Impact AI** (rerun · manual-verify · risk score) | ✅ |
+| Jira two-way sync (webhook + replay queue) | ✅ |
+| AppMap + AppMap Storyteller | ✅ |
+| Device fleet detection (`adb devices` + `xcrun simctl`) | ✅ |
+| Excel two-way sync (import · export) | ✅ |
+| Multi-project registry | ✅ |
+| Mac shell v0.1 (Electron + mocked agent runtime, swap-in-ready) | ✅ |
+| **Report Bug → auto-enqueue healing proposal** | 🔜 next |
+| Cloud deploy on Fly.io (E-025) | 🟡 in progress |
+| Anthropic Managed Agents migration (E-026) | 🔜 |
+| BrowserStack cloud runs | 🔜 |
+| Multi-tenant SaaS | 🔜 |
 
-**Chat** — Slide-out drawer connecting directly to Claude Code running locally. Ask it to run tests, check status, or create bugs.
+---
+
+## Self-healing — how it actually works
+
+When a Maestro flow fails because a selector no longer matches, Morbius doesn't just log the failure — it tries to fix it.
+
+**State machine:** `requested → snapshotting → proposed → validating → validated | invalidated → approved → applied`
+
+1. **Classify.** The run output is parsed for selector-miss signatures ("No visible element found", "Element not found", "Timeout waiting for element") in [`src/server.ts:3273-3310`](src/server.ts).
+2. **Snapshot.** `maestro hierarchy` captures the current view tree (XML, truncated to ~80 KB).
+3. **Propose.** Claude is given the failing selector + snapshot and returns a JSON proposal with `proposedSelector`, `confidence` (0..1), and `rationale`.
+4. **Validate.** Morbius re-runs the flow with the new selector. The result flips the state to `validated` or `invalidated`.
+5. **Approve.** A reviewer opens the **Healing** tab, reads the rationale, optionally edits the selector, and approves. Low-confidence proposals (<0.5) are flagged for manual review.
+6. **Apply.** The approved selector is written back into the YAML atomically and a changelog entry is recorded.
+
+**Storage:** `data/<project>/healing/proposal-<id>.md` (markdown + frontmatter).
+**API:** `/api/healing` (list), `/api/healing/:id` (get), `/api/healing/propose`, `/api/healing/:id/{modify,approve,reject}` ([`src/server.ts:1819-1913`](src/server.ts)).
+**UI:** the **Healing** tab — `HealingQueueView`, polls every 8s, groups proposals by state, shows confidence band, lets you preview the hierarchy snapshot, modify the selector, approve, or reject.
+
+---
+
+## Bug tracking + the missing edge
+
+**Today (shipped):**
+
+- `POST /api/bugs/create` ([`src/server.ts:911-947`](src/server.ts)) — accepts title, priority, category, `linkedTest`, device, failure reason, repro steps, notes; auto-assigns `BUG-NNN`.
+- `morbius ingest <maestro-dir>` — parses Maestro run logs and auto-creates bug tickets for failures with screenshots.
+- **Bugs board** — Kanban (Open · Investigating · Fixed · Closed) at `BugsView`.
+- **BugDrawer** — full bug detail with timeline, screenshot, and `linkedTest` deep-link.
+- **Bug Impact AI** — `POST /api/bug/:id/impact/generate` runs Claude over the linked test + dependents and returns `rerun` / `manualVerify` lists + a repro narrative + a risk-score band.
+- **Jira two-way sync** — webhook receiver, replay queue for failed syncs, per-bug `J · {KEY}` badge.
+
+**Next (🔜 — the dashed edge in the diagram):** a functional **Report Bug** button. The button exists today as a stub in the Bugs toolbar ([`src/server.ts:12433`](src/server.ts)) — clicking it doesn't open a form yet. The planned wiring:
+
+1. Open a Report-Bug modal pre-filled from the active test / failing run.
+2. Capture selector context (failing selector, line, hierarchy hint) from the most recent run.
+3. Create the bug via `POST /api/bugs/create`.
+4. If the failure looks like a selector miss, also `POST /api/healing/propose` to enqueue a healing proposal — closing the loop between human-filed bugs and automated repair.
 
 ---
 
 ## Commands
 
 | Command | What it does |
-|---------|-------------|
-| `morbius serve` | Start the dashboard (default port 3000) |
+|---|---|
+| `morbius serve [--port N]` | Start the dashboard (default port 3000) |
 | `morbius import <xlsx>` | Import test cases from Excel into the active project |
-| `morbius export <xlsx>` | Write dashboard changes back to Excel |
+| `morbius export <xlsx>` | Export dashboard changes back to Excel |
 | `morbius sync` | Link Maestro YAML flows to test cases by QA Plan ID |
-| `morbius ingest <dir>` | Import Maestro test results, auto-create bugs for failures |
-| `morbius create-bug --test TC-2.01 --title "..."` | Manually create a bug ticket |
+| `morbius ingest <maestro-dir>` | Ingest a Maestro run dir; auto-create bugs for failures |
+| `morbius ingest-media` | Copy latest run videos/screenshots into the project media folder |
+| `morbius create-bug` | Manually create a bug ticket |
 | `morbius validate` | Check data integrity — broken links, orphaned files, missing paths |
+| `morbius generate-flows` | Generate Maestro YAML flows from `calculatorConfig.json` |
+| `morbius pmagent-sync <slug>` | Pull a PMAgent project's QA plan into Morbius |
+| `morbius pmagent-publish <slug>` | Publish Morbius test cases back as `T-NNN-NNN-*.md` test plans in PMAgent epics |
+| `morbius run-web <testId> [--visual]` | Run a web test via Claude + Playwright MCP (E-024) |
+
+Full reference: `node dist/index.js --help`.
 
 ---
 
-## Where Data Lives
+## Where data lives
 
-Everything is stored as files. No database.
+Everything is markdown + JSON files on disk.
 
 ```
 data/
-  projects.json              ← Registry of all projects + active project
-  micro-air/                 ← One folder per project
-    config.json              ← Project config (app ID, paths, devices, env vars, Jira)
-    tests/                   ← Test cases as markdown (one file per test, by category)
-    bugs/                    ← Bug tickets as markdown (local + Jira-synced)
-    runs/                    ← Test run logs
-    screenshots/             ← Failure screenshots
+  projects.json                ← Registry + active project ID
+  <projectId>/
+    config.json                ← App ID, Maestro paths, devices, env vars, Jira creds
+    tests/
+      <category>/<test>.md     ← One markdown file per test case
+    bugs/
+      <BUG-id>.md              ← Bug with linkedTest, screenshot ref
+      <BUG-id>/impact.md       ← Bug Impact AI output
+    healing/
+      proposal-<id>.md         ← Healing state machine
+    runs/
+      <runId>.json             ← MaestroRunRecord
+      <testId>-latest.json     ← Quick pointer to most recent run
+    screenshots/<runId>/       ← Failure screenshots
+    pmagent-sync-state.json    ← Per-project sync metadata (PMAgent bridge)
+```
+
+A PMAgent-synced test case carries its source lineage in frontmatter:
+
+```yaml
+---
+id: TC-CH--001-001-1
+title: Guest Browsing — Test Plan
+category: e-001-auth-onboarding
+status: not-run
+priority: P2
+platforms: [android, ios]
+pmagent_source:
+  slug: ch-mobile
+  story_id: S-001-001
+  ac_index: 0
+  source_checksum: dca07c24901ff624
+pmagent_locked: false   # set true to pin against upstream changes
+---
 ```
 
 ---
 
-## Maestro Flow Structure
+## Philosophy: feature-area flows
 
-```
-<project>-testing/
-  Andriod test/
-    flows/                   ← 14 numbered flow files
-      01_login.yaml
-      02_create_account.yaml
-      03_hub_dashboard.yaml
-      04_hub_actions.yaml
-      05_add_hub_and_sensor.yaml
-      05_sensor_actions.yaml
-      06_notifications.yaml
-      07_account.yaml
-      08_forgot_password.yaml    (OTP placeholder)
-      09_change_password.yaml    (OTP placeholder)
-      10_subscription.yaml       (sandbox payment)
-      11_support.yaml
-      12_delete_sensor.yaml      ⚠️ destructive
-      13_delete_hub.yaml         ⚠️ destructive
-      14_delete_account.yaml     ⚠️ destructive (run LAST)
-    shared/
-      login.yaml             ← Reusable login helper
-    _archive/                ← Old 50-file structure (reference only)
-```
-
-### Run order
-```
-SETUP:    01 → 02 → 05_add
-VERIFY:   03 → 05_sensor → 11
-ACTION:   04 → 06 → 07
-OTP:      08 → 09
-PAYMENT:  10
-DESTROY:  12 → 13 → 14
-```
-
----
-
-## Features
-
-### Edit & Track
-- **Edit status inline** — Click the status pill on any test case or bug
-- **Create bugs from the UI** — "Report Bug" button in detail panels
-- **Editable notes** — Live textarea that auto-saves to markdown
-- **Changelog** — Every change logged to a `## Changelog` table in the markdown file
-- **Card reordering** — Up/down buttons to reorder test cards
-
-### Filter & Sort
-- **Status filters** — All, Pass, Fail, Flaky, In Progress, Not Run, Has YAML
-- **Type filters** — Happy Path, Flow, Detour, Negative, Edge Case (with counts)
-- **Sort bar** — Sort by ID, Status, Priority, Name, or Type
-- **Empty columns auto-hide** when filters are active
-
-### Run Tests
-- **Run from dashboard** — "Run Android" / "Run iOS" buttons when Maestro flows are linked
-- **Live status** — Spinner with elapsed time, then pass/fail badge
-- **Stop button** — Cancel a running flow mid-execution (SIGTERM + 3s SIGKILL safety net)
-- **Auto-update** — Test status updates after run completes
-- **Socket-loss recovery** — UI unsticks if the WebSocket drops before the run finishes
-
-### Integrations
-- **Jira sync** — Pull bug tickets from Jira into the Bug Board
-- **Maestro YAML** — Live view reads directly from your folders
-- **Excel two-way sync** — Import from Excel, export changes back
-
-### Chat
-- **Morbius Agent** — Slide-out drawer connects to Claude Code locally via WebSocket
-- **Suggestion chips** — Quick actions for common tasks
-- **Streaming responses** — See agent output in real-time
-
----
-
-## Claude Code Agent & Skills
-
-| Skill | What it does |
-|-------|-------------|
-| `morbius` (agent) | Full QA lifecycle — onboard, import, write flows, run tests, manage board |
-| `/morbius-preflight` | Pre-flight checks — Maestro CLI, MCP, devices, project config, app installed |
-| `/morbius-write-flows` | Write Maestro YAML flows — app-first exploration, feature-area structure |
-| `/morbius-run-test` | Execute a flow on device, update status, create bug if failed |
-| `/morbius-onboard` | Set up a new app project with guided questions |
-| `/morbius-board` | Dashboard management — import, sync, validate, serve |
-| `/morbius-bug` | Create and manage bug tickets |
-| `/morbius-jira` | Pull bugs from Jira into the dashboard |
+We map Maestro flows to the **screens users actually touch**, not one file per Excel row. Shared `login.yaml` / `setup.yaml` helpers stay in one place. Flows are numbered so setup runs first and destructive ones run last. The trade-off — fewer files, each covering multiple test cases — keeps a 150-row QA plan from becoming 150 brittle YAML files. Concrete project examples live in each project's own docs, not here.
 
 ---
 
@@ -249,58 +268,51 @@ DESTROY:  12 → 13 → 14
 
 - **Node.js 18+**
 - **Maestro CLI** — `brew install maestro` or `curl -Ls "https://get.maestro.mobile.dev" | bash`
-- **Claude Code** — For agent/chat features
-- **Android SDK** (optional) — For Android test execution
-- **Xcode** (optional) — For iOS simulator test execution
+- **Claude Code** — required for healing proposals, Bug Impact AI, and the chat drawer
+- *(optional)* **Android SDK** for Android device runs
+- *(optional)* **Xcode** for iOS simulator runs
+- *(optional)* `PMAGENT_HOME` env var — points to the sibling PMAgent checkout (default `~/PMAgent`)
+- *(optional)* Jira creds in `config.json` per project for Jira two-way sync
+- *(optional)* `ANTHROPIC_API_KEY` for SaaS / Managed-Agents paths
 
 ---
 
-## Keyboard Shortcuts
+## Repo layout
 
-| Key | Action |
-|-----|--------|
-| `1-6` | Jump between views |
-| `⌘K` or `/` | Search everything |
-| `Esc` | Close any panel |
-| `?` | Show shortcuts help |
-
----
-
-## Tech
-
-Node.js + TypeScript. Single HTTP server with embedded HTML/CSS/JS. WebSocket for chat bridge. ~7 dependencies. No React, no build pipeline for the dashboard. Zinc-palette dark theme.
+```
+src/                  Web server + embedded React dashboard (single file: src/server.ts)
+morbius-mac/          Electron Mac app (chat-first agentic shell, E-001…E-015 shipped)
+data/                 Per-project markdown DB + projects.json registry
+flows/                Maestro YAML — feature-area flows
+requirements/         Brief, epics (E-001 → E-027), releases, arch.md, design tokens
+dist/                 Compiled JS (output of `npm run build`)
+```
 
 ---
 
 ## Roadmap
 
-Morbius is evolving from a local developer tool into a full SaaS QA automation platform.
-
 | Phase | What | Status |
-|-------|------|--------|
-| 1 | MVP Dashboard + Excel Import | ✅ Complete |
-| 2 | Agent Intelligence + Sorting + Changelog + Chat | ✅ Complete |
-| 2.5 | Maestro Flow Restructure (14 flows) + App Map | ✅ Complete |
-| R-002 | Jira hardening, Excel onboarding UI, bug-impact AI, self-healing selectors, AppMap Storyteller (E-013 → E-027) | ✅ Complete |
-| Mac v0.1 | Electron shell, embedded agent runtime, 19 built-in tools, permission UX, activity stream, skills + memory, approval queue, kill switch (E-001 → E-015) | ✅ Complete |
-| v2.0 cloud | Fly.io + Cloudflare Access + PMAgent repo checkout (E-025) | 🔜 In progress |
-| v2.1 runner | Anthropic Managed Agents migration (E-026) | Planned |
-| BrowserStack | One-Click Cloud Runs | Planned |
-| SaaS | Auth, database, multi-tenant | Planned |
+|---|---|---|
+| 1 — MVP | Dashboard + Excel import + multi-project | ✅ |
+| 2 — Agent + Chat | Inline edits, changelog, chat drawer | ✅ |
+| 2.5 — Maestro restructure | Feature-area flows, AppMap | ✅ |
+| E-017 — Self-healing selectors | Classify → snapshot → propose → validate → approve | ✅ |
+| E-023 — PMAgent bridge | preview · transfer · publish-test-plans | ✅ |
+| E-024 — Web test runner | Claude + Playwright MCP (headless + visual) | ✅ |
+| Mac v0.1 | Electron shell, permission ladder, kill switch, mocked agent | ✅ |
+| E-016 — Bug → Healing edge | Functional Report-Bug button → heal proposal | 🔜 next |
+| E-025 — Cloud deploy | Fly.io + Cloudflare Access, hosted markdown DB | 🟡 |
+| BrowserStack | One-click cloud runs | 🔜 |
+| E-026 — Managed Agents | Anthropic-hosted agent runtime | 🔜 |
+| SaaS | Auth, multi-tenant, hosted | 🔜 |
 
-See [ROADMAP.md](./ROADMAP.md) for full phase details, and `requirements/releases/` for release plans.
+See [`ROADMAP.md`](./ROADMAP.md) and `requirements/releases/` for the full phase plan.
 
-## Repo layout
+**The repeatable pipeline** (onboard → app map → automation plan → review → author → run → heal → bug), with each stage's owning skill/CLI and the guardrails that prevent regressions, is documented in **[`requirements/HARNESS.md`](./requirements/HARNESS.md)**. Run `node dist/index.js doctor` to self-check harness health.
 
-```
-src/                    Web app server + embedded React dashboard
-morbius-mac/            Electron Mac app (chat-first agentic)
-data/                   Per-project markdown DB (tests, bugs, runs, screenshots)
-  projects.json         Project registry
-  micro-air/            Micro-Air ConnectRV
-  sts/                  STS Wholesale
-  cooper-s-hawk-mobile-app/  Cooper's Hawk Mobile App
-  morbius/              Morbius's own test data (dogfooding)
-flows/                  Maestro YAML — 14 feature-area flows
-requirements/           Brief, epics (E-001 → E-027), releases, arch, design tokens
-```
+---
+
+## Future: web + Mac complement each other
+
+Today the web app and Mac app are independent surfaces with overlapping capability. The direction: **web becomes the team board** (PMAgent QA tab on steroids — coverage, runs, healing queue, Jira), **Mac becomes the engineer driver** (chat-first, AppMap exploration, kill switch, permission ladder, runs against the local fleet). They share the same on-disk markdown DB so a project authored on Mac shows up immediately on the web board. This split is roadmap, not done — flagged so it informs decisions today.
