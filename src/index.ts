@@ -7,6 +7,7 @@ import { startServer } from './server.js';
 import { importExcel, exportToExcel } from './parsers/excel.js';
 import { parseMaestroOutput } from './parsers/maestro-results.js';
 import { writeBug, loadAllTestCases, loadAllBugs, loadProjectRegistry, getDataDir, loadProjectConfig, loadAutomationPlan } from './parsers/markdown.js';
+import { recomputeSourceChecksum } from './parsers/pmagent.js';
 import { analyzeSelectors } from './analyzer.js';
 import { parseMaestroYaml } from './parsers/maestro-yaml.js';
 import yaml from 'js-yaml';
@@ -687,7 +688,7 @@ program
 // ── harness self-check ────────────────────────────────────────────────────
 program
   .command('doctor')
-  .description('Harness health check — stale skills, onboarding, scenario/ID hygiene, persona integrity')
+  .description('Harness health check — stale skills, onboarding, scenario/ID hygiene, persona integrity, QA-board legibility (titles/reviewEpics/devices/drift)')
   .action(() => {
     const registry = loadProjectRegistry();
     const projectId = registry.activeProject || '(none)';
@@ -752,6 +753,51 @@ program
       const missing = [...used].filter(k => !known.has(k));
       if (missing.length) bad('automation-plan references personas not in config.testAccounts: ' + missing.join(', '));
       else if (used.size) ok('persona integrity OK (' + used.size + ' personas, all registered)');
+    }
+
+    // 7. QA presentation / legibility (the "Curate" stage — morbius-curate skill)
+    const proj = registry.projects.find(p => p.id === registry.activeProject) as { reviewEpics?: string[] } | undefined;
+    const reviewEpics = proj?.reviewEpics ?? [];
+    if (tests.length) {
+      // 7a. Junk / shredded titles: '#'-leading (heading leak) or lowercase-start fragments.
+      //     A curated test title starts with a capital, digit, or ID — never '#' or a bare verb phrase.
+      const isJunk = (title: string) => { const t = (title || '').trim(); return /^#/.test(t) || /^[a-z]/.test(t); };
+      const inReview = (cat: string) => reviewEpics.some(p => (cat || '').startsWith(p));
+      const junk = tests.filter(t => isJunk(t.title));
+      const junkLoose = junk.filter(t => !inReview(t.category));
+      if (junk.length === 0) ok('test-case titles are legible (no raw/shredded titles)');
+      else if (junkLoose.length) warn(junkLoose.length + ' card(s) have raw/shredded titles OUTSIDE reviewEpics (e.g. "' + junkLoose[0].title + '") — fix titles (re-sync after the pmagent.ts title fix) or quarantine the epic in reviewEpics');
+      else warn(junk.length + ' raw-title card(s), all already quarantined via reviewEpics');
+      if (reviewEpics.length) ok('reviewEpics quarantine active: ' + reviewEpics.join(', '));
+    }
+    // 7b. Device-matrix honesty — config lists the project's real devices (else getDeviceList falls back to a generic 4).
+    if (cfg) {
+      if (!cfg.devices || cfg.devices.length === 0) warn('config.json: no devices set — device matrix + dashboard coverage fall back to the generic 4 (set the real devices)');
+      else ok('device matrix reflects ' + cfg.devices.length + ' configured device(s)');
+    }
+    // 7c. Source drift vs PMAgent — recompute each card's source checksum and compare to the stored one.
+    const sourced = tests.filter(t => t.pmagentSource?.sourcePath);
+    if (sourced.length) {
+      let drifted = 0, missing = 0;
+      for (const t of sourced) {
+        const s = t.pmagentSource!;
+        if (!fs.existsSync(s.sourcePath)) { missing++; continue; }
+        const live = recomputeSourceChecksum(s.sourcePath, s.acIndex);
+        if (live == null) missing++;
+        else if (live !== s.sourceChecksum) drifted++;
+      }
+      if (drifted || missing) warn(drifted + ' card(s) drifted from PMAgent source' + (missing ? ', ' + missing + ' source(s) missing' : '') + ' — re-pull to re-baseline');
+      else ok('all ' + sourced.length + ' sourced card(s) in sync with PMAgent');
+    }
+    // 7d. QA Plan orientation layer — QA / Flow / Release plan docs imported (the QA Plan view)
+    if (sourced.length) {
+      let planCount = 0;
+      try {
+        const pp = path.join(dir, 'plans', 'plans.json');
+        if (fs.existsSync(pp)) planCount = (JSON.parse(fs.readFileSync(pp, 'utf-8')).items || []).length;
+      } catch { /* ignore */ }
+      if (planCount === 0) warn('no QA / Flow / Release plan docs imported — the QA Plan view is empty; re-push from PMAgent');
+      else ok(planCount + ' QA plan doc(s) imported (QA Plan view)');
     }
 
     console.log('\n  ' + (problems ? '✗ ' + problems + ' problem(s)' : '✓ no problems') + (warns ? ', ' + warns + ' warning(s)' : '') + '\n');

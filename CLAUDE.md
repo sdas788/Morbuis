@@ -5,9 +5,9 @@ Visual Kanban dashboard for Maestro + Claude Code mobile QA. Reads test cases fr
 
 ## Architecture
 - Single-file HTTP server with embedded HTML/CSS/JS (same pattern as PMAgent board.ts)
-- Node.js + TypeScript, no frontend framework
+- Node.js + TypeScript, no frontend framework or build step for the UI; the dashboard JSX in `generateJS()` is precompiled server-side with esbuild at first request (falls back to in-browser Babel if the transform fails)
 - Markdown files as database, screenshots stored locally
-- Vercel-style monochrome design (pure black/white, only status colors)
+- Linear-style dark UI on OKLCh design tokens (light theme + accent presets included)
 
 ## Key Commands
 - `npm run build` — compile TypeScript
@@ -27,7 +27,8 @@ Visual Kanban dashboard for Maestro + Claude Code mobile QA. Reads test cases fr
 - `data/` — markdown files, screenshots, run logs
 
 ## Design System
-- Background: #000000, Surface: #111111, Borders: #333333
-- Text: #FFFFFF primary, #888888 secondary
-- Only color = status: Pass #45E0A8, Fail #E5484D, Flaky #F5A623
+- Authoritative token values: `requirements/design-tokens.md`; tokens live as CSS custom properties in `generateCSS()` (src/server.ts), OKLCh color space, dark default + `[data-theme="light"]`
+- Deep near-black base with a tight elevation ramp (`--bg` → `--bg-elev` → `--bg-elev-2` → `--bg-hover`), hairline alpha borders, 4-tier text (`--fg`/`-muted`/`-dim`/`-faint`), indigo-violet `--accent` with presets, 3-tier shadows (`sm`/`md`/`pop`)
+- Status colors only signal real state: Pass `--ok`, Fail `--fail`, Flaky `--warn`. Never color a zero/not-run state (no red dots before a run has happened)
 - Font: Inter + JetBrains Mono for code
+- Editing UI: the whole dashboard is inside template literals — escape backticks, `${`, and regex backslashes in `generateJS()`

@@ -408,6 +408,11 @@ export interface ProjectConfig {
   // E-028 / Automation Planner: persona registry. Credential VALUES live in `env`
   // (or secrets) keyed by the env-var names referenced here — never inline here.
   testAccounts?: TestPersona[];
+  // Triage Shelf (QA legibility): category-slug prefixes whose test cards are raw /
+  // un-curated imports — e.g. over-shredded PMAgent epics. Cards in these epics are
+  // flagged "needs review" and excluded from the default Ready worklist on the Test
+  // Cases board (kept on disk, one click away). Omit → nothing flagged.
+  reviewEpics?: string[];
 }
 
 // ===== E-028: Automation Planner =====

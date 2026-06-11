@@ -2,12 +2,13 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { execSync, spawn, type ChildProcess } from 'node:child_process';
 import { WebSocketServer, WebSocket } from 'ws';
 import { loadAllTestCases, loadTestCaseMarkdownBody, loadAllBugs, loadAllCategories, loadAllRuns, loadProjectRegistry, saveProjectRegistry, loadProjectConfig, saveProjectConfig, getDataDir, updateTestCaseById, updateBugById, writeBug, writeBugImpact, readBugImpact, writeHealingProposal, readHealingProposal, loadAllHealingProposals, writeTestCase as writeTestCaseToDisk, writeAppMapNarrative, readAppMapNarrative, loadAutomationPlan, saveAutomationPlan } from './parsers/markdown.js';
 import type { AutomationPlan, AutomationCandidate, ProposedFlow } from './types.js';
 import { importExcel, parseExcelFile, writeParsedExcel, type ParsedExcel } from './parsers/excel.js';
-import { parsePMAgentProject, publishTestPlansToPMAgent, type PMAgentParseResult } from './parsers/pmagent.js';
+import { parsePMAgentProject, publishTestPlansToPMAgent, recomputeSourceChecksum, type PMAgentParseResult } from './parsers/pmagent.js';
 import { runAgentTask } from './runners/web-agent.js';
 import { parseMaestroYaml, stepsToHtml, replaceSelector as replaceSelectorInFlow, replaceSelectorInText } from './parsers/maestro-yaml.js';
 import { parseCalculatorConfig, buildCoverageMatrix, findFiles } from './parsers/calculator-config.js';
@@ -70,6 +71,20 @@ export function startServer(port: number): void {
     // Media serving (videos + screenshots from project mediaPath — outside Morbius repo)
     if (pathname.startsWith('/media/')) {
       serveMedia(pathname, res);
+      return;
+    }
+
+    // App bundle — compiled once at startup, served as its own resource so it can
+    // load with defer (HTML paints the shell immediately) and revalidate cheaply.
+    if (pathname === '/app.js') {
+      const js = getCompiledDashboardJS();
+      if (js !== null) {
+        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache', 'ETag': getCompiledDashboardETag() });
+        res.end(js);
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('precompile unavailable — page is on the inline Babel fallback');
+      }
       return;
     }
 
@@ -689,7 +704,22 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
       }
 
       const markdownBody = loadTestCaseMarkdownBody(id, dir);
-      json(res, { ...test, maestroHtml, maestroYaml, selectorWarnings, markdownBody });
+
+      // Phase 3: source-drift vs the PMAgent AC/test-plan this card was imported from.
+      let drift = 'none';
+      const src = (test as any).pmagentSource;
+      if ((test as any).pmagentLocked) {
+        drift = 'pinned';
+      } else if (src && src.sourcePath) {
+        if (!fs.existsSync(src.sourcePath)) {
+          drift = 'source-missing';
+        } else {
+          const live = recomputeSourceChecksum(src.sourcePath, src.acIndex);
+          drift = live == null ? 'source-missing' : (live === src.sourceChecksum ? 'in-sync' : 'drifted');
+        }
+      }
+
+      json(res, { ...test, maestroHtml, maestroYaml, selectorWarnings, markdownBody, drift });
     } else if (pathname.startsWith('/api/bug/') && req.method === 'GET' && !pathname.includes('/update') && !pathname.includes('/create') && !pathname.includes('/impact')) {
       const id = decodeURIComponent(pathname.replace('/api/bug/', ''));
       const bugs = loadAllBugs(dir);
@@ -777,15 +807,20 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
           const test = tests.find(t => t.id === testId);
           if (!test) { res.writeHead(404); res.end('{"error":"Test not found"}'); return; }
 
-          // Resolve flow path
+          // Resolve flow path: direct frontmatter link first, then the automation-plan fallback.
           let flowPath = '';
           if (platform === 'android') flowPath = (test as any).maestroFlowAndroid || test.maestroFlow || '';
           else if (platform === 'ios') flowPath = (test as any).maestroFlowIos || test.maestroFlow || '';
           else flowPath = test.maestroFlow || '';
 
           if (!flowPath || !fs.existsSync(flowPath)) {
+            const planned = resolvePlannedFlowPath(testId, platform, dir);
+            if (planned) flowPath = planned;
+          }
+
+          if (!flowPath || !fs.existsSync(flowPath)) {
             res.writeHead(400);
-            res.end(JSON.stringify({ error: 'No Maestro flow found for ' + platform + (flowPath ? ' (file missing: ' + flowPath + ')' : '') }));
+            res.end(JSON.stringify({ error: 'No Maestro flow linked for ' + testId + ' on ' + platform + ' — link one or add it to the automation plan.' }));
             return;
           }
 
@@ -966,6 +1001,27 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
         projectDisplayName,
       });
       return;
+
+    // ── E-029: QA Plan view — PMAgent QA/Flow/Release plan docs ───────────
+    } else if (pathname === '/api/plans' && req.method === 'GET') {
+      json(res, loadPlansIndex(dir) || { generatedAt: '', items: [], releases: [] });
+    } else if (pathname.startsWith('/api/plans/') && req.method === 'GET') {
+      const id = decodeURIComponent(pathname.replace('/api/plans/', ''));
+      const idx = loadPlansIndex(dir);
+      const item = idx?.items.find(i => i.id === id);
+      if (!item) { res.writeHead(404); res.end('{"error":"Plan not found"}'); return; }
+      let body = '';
+      let sections: Array<{ level: number; heading: string; content: string }> = [];
+      // Guard against path traversal — item.file must be a bare *.md basename (no separators / ..).
+      if (/^[A-Za-z0-9_.-]+\.md$/.test(item.file) && !item.file.includes('..')) {
+        try {
+          const raw = fs.readFileSync(path.join(dir, 'plans', item.file), 'utf-8');
+          const ix = raw.search(/^##\s/m);   // drop the H1 + header block; keep from first section
+          body = ix >= 0 ? raw.slice(ix) : raw;
+          sections = extractPlanSections(body);   // structured H2/H3 sections for the detail cards
+        } catch { /* body stays empty */ }
+      }
+      json(res, { ...item, body, sections });
 
     // ── E-028: Automation Planner ─────────────────────────────────────────
     } else if (pathname === '/api/automation-plan' && req.method === 'GET') {
@@ -3795,6 +3851,130 @@ function resolvePMAgentPath(slug: string | undefined, override: string | undefin
   return null;
 }
 
+// ── E-029: QA Plan import — bring PMAgent's QA / Flow / Release plan docs into Morbius ──
+// PMAgent's QA tab shows an orientation layer ABOVE the story test cases: the QA Plan operating
+// doc (qa-testplan.md), Flow Plans (TF-NNN), and Release Plans (TR-NNN). The test-case importer
+// only walked epics/, so these never came over — leaving the QA team with cards but no roadmap.
+// We copy them verbatim into <projectDir>/plans/ (same format) + write an index for the view.
+interface PlanItem {
+  type: 'qa' | 'flow' | 'release' | 'release-def' | 'userflow';
+  id: string;                         // 'qa-plan' | 'TF-001' | 'TR-001' | 'R-001' | 'UF-001'
+  title: string;
+  fields: Record<string, string>;     // parsed **Key:** header block
+  file: string;
+  storyIds: string[];                 // S-NNN-NNN stories this plan covers (for execution overlay)
+  ufId?: string;                      // flow plan → its User Flow (TF Flow: field)
+  flowId?: string;                    // matched Morbius Maestro flow (shared stories) for focused jump
+  flowGraph?: string;                 // mermaid screen-flow graph (User Flows) for inline render
+}
+interface PlansIndex {
+  generatedAt: string;
+  items: PlanItem[];
+  releases: Array<{ id: string; title: string; trId: string | null }>;   // release roadmap (present/missing TR)
+}
+
+function parsePlanDoc(raw: string): { title: string; fields: Record<string, string> } {
+  const lines = raw.split('\n');
+  const h1 = lines.find(l => /^#\s+/.test(l)) || '';
+  const title = h1.replace(/^#\s+/, '')
+    .replace(/^(?:Flow|Release|Story|Project)?\s*Test Plan:\s*/i, '')
+    .replace(/^(?:Release|User Flow):\s*/i, '')
+    .trim();
+  const fields: Record<string, string> = {};
+  for (const l of lines) {
+    if (/^##\s/.test(l)) break;       // header block ends at the first section
+    const m = l.match(/^\*\*([^*]+?):\*\*\s*(.+)$/);
+    if (m) fields[m[1].trim()] = m[2].trim();
+  }
+  return { title, fields };
+}
+
+function planMetaFromFile(file: string): { type: PlanItem['type']; id: string } | null {
+  if (/^qa-testplan\.md$/i.test(file)) return { type: 'qa', id: 'qa-plan' };
+  let m = file.match(/^(TF-\d{3})/i); if (m) return { type: 'flow', id: m[1].toUpperCase() };
+  m = file.match(/^(TR-\d{3})/i); if (m) return { type: 'release', id: m[1].toUpperCase() };
+  m = file.match(/^(UF-\d{3})/i); if (m) return { type: 'userflow', id: m[1].toUpperCase() };
+  m = file.match(/^(R-\d{3})/i); if (m) return { type: 'release-def', id: m[1].toUpperCase() };
+  return null;
+}
+
+function importPMAgentPlans(pmagentPath: string, projectDir: string): number {
+  const realRoot = fs.existsSync(pmagentPath) ? fs.realpathSync(pmagentPath) : pmagentPath;
+  const plansDir = path.join(projectDir, 'plans');
+  const items: PlanItem[] = [];
+  let copied = 0;
+  for (const sub of ['qa', 'releases', 'flows']) {
+    const srcDir = path.join(realRoot, sub);
+    if (!fs.existsSync(srcDir)) continue;
+    for (const file of fs.readdirSync(srcDir)) {
+      if (!file.endsWith('.md')) continue;
+      const meta = planMetaFromFile(file);
+      if (!meta) continue;
+      let raw: string;
+      try { raw = fs.readFileSync(path.join(srcDir, file), 'utf-8'); } catch { continue; }
+      fs.mkdirSync(plansDir, { recursive: true });
+      try { fs.writeFileSync(path.join(plansDir, file), raw); copied++; } catch { continue; }
+      const { title, fields } = parsePlanDoc(raw);
+      const storyIds = Array.from(new Set((raw.match(/\bS-\d{3}-\d{3}\b/g) || []).map(s => s.toUpperCase())));
+      const ufMatch = (fields.Flow || '').match(/UF-\d{3}/i);   // a Flow Plan's linked User Flow
+      const mmd = raw.match(/```mermaid\s*([\s\S]*?)```/);        // screen-flow graph (User Flows)
+      items.push({ type: meta.type, id: meta.id, title: title || meta.id, fields, file, storyIds, ufId: ufMatch ? ufMatch[0].toUpperCase() : undefined, flowGraph: mmd ? mmd[1].trim() : undefined });
+    }
+  }
+  if (!items.length) return 0;
+
+  // Match each plan to a written Morbius Maestro flow (by shared stories) so the hub's
+  // "Automation → Maestro" jump can land on the exact flow. Stories derived from flow testIds.
+  try {
+    const plan = loadAutomationPlan(path.basename(projectDir));
+    const written = ((plan && plan.flows) || []).filter(fl => fl.status === 'written' || fl.status === 'passing');
+    const flowStories = (fl: { testIds?: string[] }) => new Set((fl.testIds || []).map(t => {
+      const m = t.match(/-(\d{3})-(\d{3})-/); return m ? 'S-' + m[1] + '-' + m[2] : '';
+    }).filter(Boolean));
+    const stories = written.map(fl => ({ id: fl.id, st: flowStories(fl) }));
+    for (const it of items) {
+      const hit = stories.find(s => (it.storyIds || []).some(sid => s.st.has(sid)));
+      if (hit) it.flowId = hit.id;
+    }
+  } catch { /* no flow match */ }
+  // Release roadmap: every R-NNN definition, and whether a matching TR-NNN plan exists yet.
+  const releases = items.filter(i => i.type === 'release-def').map(r => {
+    const num = r.id.replace(/^R-/, '');
+    const tr = items.find(i => i.type === 'release' && i.id === 'TR-' + num);
+    return { id: r.id, title: r.title, trId: tr ? tr.id : null };
+  }).sort((a, b) => a.id.localeCompare(b.id));
+  const index: PlansIndex = { generatedAt: new Date().toISOString(), items, releases };
+  try { fs.writeFileSync(path.join(plansDir, 'plans.json'), JSON.stringify(index, null, 2)); } catch { /* skip */ }
+  return copied;
+}
+
+// Split a plan-doc body into ordered H2/H3 sections so the QA Plan detail can render the
+// decision-critical content (Scope, Journeys, Execution order, ITCs, Screens…) as scannable
+// cards instead of one 20k-char wall. Each section = text from its heading to the next H2/H3.
+function extractPlanSections(body: string): Array<{ level: number; heading: string; content: string }> {
+  const heads: Array<{ level: number; heading: string; start: number; end: number }> = [];
+  const re = /^(#{2,3})[ \t]+(.+?)[ \t]*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    heads.push({ level: m[1].length, heading: m[2].trim(), start: m.index, end: m.index + m[0].length });
+  }
+  const out: Array<{ level: number; heading: string; content: string }> = [];
+  for (let i = 0; i < heads.length; i++) {
+    const contentEnd = i + 1 < heads.length ? heads[i + 1].start : body.length;
+    const content = body.slice(heads[i].end, contentEnd).trim();
+    if (content || heads[i].level === 2) out.push({ level: heads[i].level, heading: heads[i].heading, content });
+  }
+  return out;
+}
+
+function loadPlansIndex(projectDir: string): PlansIndex | null {
+  try {
+    const p = path.join(projectDir, 'plans', 'plans.json');
+    if (!fs.existsSync(p)) return null;
+    return JSON.parse(fs.readFileSync(p, 'utf-8')) as PlansIndex;
+  } catch { return null; }
+}
+
 interface TransferResult {
   ok: true;
   morbiusProjectId: string;
@@ -3891,6 +4071,10 @@ async function runPMAgentTransfer(opts: {
 
   const projectDir = path.join(getDataRoot(), projectId);
   fs.mkdirSync(projectDir, { recursive: true });
+
+  // E-029: also bring over the QA / Flow / Release plan docs (the orientation layer above
+  // the story test cases) — copied verbatim into <projectDir>/plans/ for the QA Plan view.
+  try { importPMAgentPlans(resolvedPath, projectDir); } catch (err) { console.warn('[pmagent] plan import skipped:', err); }
 
   // Onboarding: ensure a config.json stub exists so the project is fully onboarded
   // (appId / maestro paths / personas to be filled in). Without this, pmagent-synced
@@ -4637,6 +4821,22 @@ function buildDashboardData(dir?: string) {
 }
 
 function getDeviceList() {
+  // Honesty: reflect the ACTIVE project's configured devices, not a fixed default — otherwise
+  // the device matrix and dashboard invent phantom "missing 100%" coverage gaps for hardware
+  // the project never targets (e.g. Road Scholar tests only iPhone + Android Phone). Falls back
+  // to the standard four when a project has no devices configured.
+  try {
+    const registry = loadProjectRegistry();
+    const project = registry.projects.find(p => p.id === registry.activeProject);
+    const devices = project && Array.isArray(project.devices) ? project.devices : [];
+    if (devices.length) {
+      return devices.map(d => ({
+        id: d.id,
+        name: d.name,
+        platform: (d.platform === 'ios' ? 'ios' : 'android') as 'ios' | 'android',
+      }));
+    }
+  } catch { /* fall through to default */ }
   return [
     { id: 'ipad', name: 'iPad', platform: 'ios' as const },
     { id: 'iphone', name: 'iPhone', platform: 'ios' as const },
@@ -4645,11 +4845,69 @@ function getDeviceList() {
   ];
 }
 
+// Phase 2 (executability): when a test card carries no direct maestroFlow link, fall back to
+// the automation plan's flow→testIds mapping and resolve data/<project>/flows/<flowId>.yaml.
+// Keeps the card↔flow link in the (already-authoritative) automation plan instead of forcing
+// machine-specific paths into committed test-card frontmatter.
+function resolvePlannedFlowPath(testId: string, platform: string, dir: string): string | null {
+  try {
+    const projectId = path.basename(dir);
+    const plan = loadAutomationPlan(projectId);
+    if (!plan) return null;
+    for (const f of plan.flows) {
+      if (!f.testIds.includes(testId)) continue;
+      if (platform && f.platforms.length && !f.platforms.includes(platform)) continue;
+      const candidate = path.join(dir, 'flows', f.id + '.yaml');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch { /* fall through → no planned flow */ }
+  return null;
+}
+
 // ============================================================
 // HTML Generation — Vercel-style Monochrome Dashboard
 // ============================================================
 
+// Pre-transpile the dashboard JSX once at first request and cache it, so the
+// browser gets plain JS + production React instead of pulling Babel standalone
+// and re-transpiling ~500KB of JSX on every page load (was >1.4s to first
+// render on localhost). null = transform failed → serve the legacy in-browser
+// Babel path so a syntax slip never blanks the dashboard.
+let compiledDashboardJS: string | null | undefined;
+let compiledDashboardETag = '"morbius-app"';
+function getCompiledDashboardJS(): string | null {
+  if (compiledDashboardJS === undefined) {
+    try {
+      // createRequire: this file compiles to ESM, where bare require() doesn't exist.
+      const esbuild = createRequire(import.meta.url)('esbuild') as typeof import('esbuild');
+      compiledDashboardJS = esbuild.transformSync(generateJS(), { loader: 'jsx', target: 'es2020' }).code;
+      compiledDashboardETag = '"app-' + compiledDashboardJS.length.toString(36) + '"';
+    } catch (err) {
+      console.error('[morbius] JSX precompile failed — falling back to in-browser Babel:', err instanceof Error ? err.message : err);
+      compiledDashboardJS = null;
+    }
+  }
+  return compiledDashboardJS;
+}
+function getCompiledDashboardETag(): string { return compiledDashboardETag; }
+
 function generateHtml(): string {
+  const compiledJS = getCompiledDashboardJS();
+  // Compiled path: everything defers — the HTML paints its CSS shell immediately and
+  // scripts execute in order before DOMContentLoaded. Fallback path keeps the legacy
+  // synchronous order (Babel standalone needs the inline text/babel script in place).
+  const appScripts = compiledJS !== null
+    ? `<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin defer></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin defer></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js" defer></script>
+<script src="/app.js" defer></script>`
+    : `<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
+<script type="text/babel">${generateJS()}</script>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -4663,16 +4921,15 @@ function generateHtml(): string {
 </head>
 <body>
 <div id="root"></div>
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin></script>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 <script>
 // E-027 / S-027-006: designer-grade Mermaid theme — Morbius monochrome palette,
 // Inter typography, hairline borders, status accent strip on flow nodes (added
 // post-render in AppMapView).
-window.mermaid && window.mermaid.initialize({
+// Wrapped in DOMContentLoaded so mermaid can load deferred (it's ~3MB and only
+// the App Map view uses it) — deferred scripts finish before this event fires.
+window.addEventListener('DOMContentLoaded', function () {
+  if (!window.mermaid) return;
+  window.mermaid.initialize({
   startOnLoad: false,
   theme: 'base',
   securityLevel: 'loose',
@@ -4722,6 +4979,7 @@ window.mermaid && window.mermaid.initialize({
     "g.node.status-covered:hover rect, g.node.status-covered:hover polygon, g.node.status-covered:hover path { filter: drop-shadow(-4px 0 0 #45E0A8) drop-shadow(0 1px 0 rgba(255,255,255,0.04)); }",
     "g.node.flow-clickable { cursor: pointer; }",
   ].join(' '),
+  });
 });
 </script>
 <script>
@@ -4733,7 +4991,7 @@ window.__TWEAKS__ = {
   "cardStyle": "elevated"
 };
 </script>
-<script type="text/babel">${generateJS()}</script>
+${appScripts}
 </body>
 </html>`;
 }
@@ -4747,82 +5005,97 @@ function generateCSS(): string {
 :root {
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  color-scheme: dark;
 
-  /* Dark palette (default) */
-  --bg: oklch(0.16 0.01 270);
-  --bg-elev: oklch(0.19 0.012 270);
-  --bg-elev-2: oklch(0.22 0.014 270);
-  --bg-hover: oklch(0.24 0.016 270);
-  --bg-sunken: oklch(0.13 0.008 270);
-  --border: oklch(0.28 0.012 270);
-  --border-strong: oklch(0.36 0.014 270);
-  --fg: oklch(0.98 0.002 270);
-  --fg-muted: oklch(0.75 0.008 270);
-  --fg-dim: oklch(0.56 0.01 270);
-  --fg-faint: oklch(0.42 0.01 270);
+  /* Dark palette (default).
+     Design intent (v2 re-grade): deep near-black base the way Linear/Vercel sit
+     (L 0.13, not 0.16 — lighter dark themes read "admin template"), a tight
+     elevation ramp, and hairline WHITE-ALPHA borders instead of opaque grays —
+     alpha borders blend correctly over every surface and are the single
+     biggest "refined" lever in a dark UI. Neutrals carry a whisper of violet
+     (hue 275, chroma ≤0.01) so surfaces feel intentional, never purple. */
+  --bg: oklch(0.13 0.007 275);
+  --bg-elev: oklch(0.165 0.008 275);
+  --bg-elev-2: oklch(0.2 0.009 275);
+  --bg-hover: oklch(0.225 0.01 275);
+  --bg-sunken: oklch(0.105 0.006 275);
+  --border: oklch(1 0 0 / 0.08);
+  --border-strong: oklch(1 0 0 / 0.15);
+  --fg: oklch(0.955 0.002 275);
+  --fg-muted: oklch(0.77 0.006 275);
+  --fg-dim: oklch(0.62 0.008 275);
+  --fg-faint: oklch(0.5 0.008 275);
 
-  --ok: oklch(0.72 0.16 155);
-  --ok-bg: oklch(0.32 0.05 155 / 0.35);
-  --fail: oklch(0.68 0.22 25);
-  --fail-bg: oklch(0.35 0.08 25 / 0.35);
-  --warn: oklch(0.78 0.15 75);
-  --warn-bg: oklch(0.38 0.05 75 / 0.35);
-  --info: oklch(0.72 0.15 235);
-  --info-bg: oklch(0.32 0.05 235 / 0.35);
+  /* Status — deepened a step from the v1 neons; soft backgrounds are now
+     alpha of the status color itself, so pill/tint pairs stay in lockstep. */
+  --ok: oklch(0.7 0.145 160);
+  --ok-bg: oklch(0.7 0.145 160 / 0.12);
+  --fail: oklch(0.64 0.19 24);
+  --fail-bg: oklch(0.64 0.19 24 / 0.12);
+  --warn: oklch(0.76 0.135 80);
+  --warn-bg: oklch(0.76 0.135 80 / 0.12);
+  --info: oklch(0.69 0.125 240);
+  --info-bg: oklch(0.69 0.125 240 / 0.12);
 
-  /* Accent — violet default; overridable */
-  --accent: oklch(0.68 0.17 285);
+  /* Accent — indigo-violet, pulled down from the v1 candy violet; overridable */
+  --accent: oklch(0.63 0.16 285);
   --accent-contrast: oklch(0.99 0 0);
-  --accent-soft: oklch(0.3 0.08 285 / 0.4);
+  --accent-soft: oklch(0.63 0.16 285 / 0.15);
 
   --radius-sm: 6px;
   --radius: 10px;
   --radius-lg: 14px;
+  /* Elevation: cards barely lift (sm), dropdowns float (md), overlays pop (pop) */
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
-  --shadow-md: 0 6px 24px -8px rgb(0 0 0 / 0.4), 0 2px 6px -2px rgb(0 0 0 / 0.25);
+  --shadow-md: 0 4px 16px -4px rgb(0 0 0 / 0.4), 0 1px 4px rgb(0 0 0 / 0.3);
+  --shadow-pop: 0 16px 50px -12px rgb(0 0 0 / 0.6), 0 4px 14px -6px rgb(0 0 0 / 0.45);
 
   --row-gap: 14px;
   --pad: 20px;
 }
 
 [data-theme="light"] {
-  --bg: oklch(0.985 0.003 90);
+  color-scheme: light;
+  /* Light: neutral-cool paper, not the v1 warm hue-90 cream — a yellow-tinted
+     base fights the violet accent and reads consumer, not tooling. */
+  --bg: oklch(0.984 0.001 260);
   --bg-elev: oklch(1 0 0);
-  --bg-elev-2: oklch(0.98 0.004 90);
-  --bg-hover: oklch(0.95 0.005 90);
-  --bg-sunken: oklch(0.96 0.004 90);
-  --border: oklch(0.9 0.006 90);
-  --border-strong: oklch(0.82 0.008 90);
-  --fg: oklch(0.18 0.01 270);
-  --fg-muted: oklch(0.38 0.01 270);
-  --fg-dim: oklch(0.55 0.008 270);
-  --fg-faint: oklch(0.7 0.006 270);
+  --bg-elev-2: oklch(0.972 0.002 260);
+  --bg-hover: oklch(0.945 0.003 260);
+  --bg-sunken: oklch(0.958 0.002 260);
+  --border: oklch(0 0 0 / 0.09);
+  --border-strong: oklch(0 0 0 / 0.17);
+  --fg: oklch(0.215 0.012 275);
+  --fg-muted: oklch(0.43 0.01 275);
+  --fg-dim: oklch(0.52 0.008 275);
+  --fg-faint: oklch(0.62 0.006 275);
 
-  --ok: oklch(0.58 0.16 155);
-  --ok-bg: oklch(0.92 0.07 155 / 0.6);
-  --fail: oklch(0.55 0.22 25);
-  --fail-bg: oklch(0.94 0.07 25 / 0.6);
-  --warn: oklch(0.62 0.15 75);
-  --warn-bg: oklch(0.94 0.08 75 / 0.6);
-  --info: oklch(0.55 0.15 235);
-  --info-bg: oklch(0.93 0.06 235 / 0.5);
+  --ok: oklch(0.545 0.135 160);
+  --ok-bg: oklch(0.545 0.135 160 / 0.12);
+  --fail: oklch(0.55 0.195 24);
+  --fail-bg: oklch(0.55 0.195 24 / 0.1);
+  --warn: oklch(0.6 0.125 80);
+  --warn-bg: oklch(0.6 0.125 80 / 0.14);
+  --info: oklch(0.53 0.125 245);
+  --info-bg: oklch(0.53 0.125 245 / 0.1);
 
-  --accent: oklch(0.55 0.17 285);
-  --accent-soft: oklch(0.92 0.05 285 / 0.6);
+  --accent: oklch(0.51 0.16 285);
+  --accent-soft: oklch(0.51 0.16 285 / 0.12);
 
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
-  --shadow-md: 0 8px 24px -8px rgb(0 0 0 / 0.12), 0 2px 6px -2px rgb(0 0 0 / 0.06);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
+  --shadow-md: 0 4px 16px -6px rgb(0 0 0 / 0.1), 0 1px 4px rgb(0 0 0 / 0.05);
+  --shadow-pop: 0 16px 50px -12px rgb(0 0 0 / 0.18), 0 4px 14px -6px rgb(0 0 0 / 0.1);
 }
 
-/* Accent presets */
-[data-accent="violet"] { --accent: oklch(0.68 0.17 285); --accent-soft: oklch(0.3 0.08 285 / 0.4); }
-[data-accent="violet"][data-theme="light"] { --accent: oklch(0.55 0.17 285); --accent-soft: oklch(0.92 0.05 285 / 0.6); }
-[data-accent="green"] { --accent: oklch(0.72 0.16 155); --accent-soft: oklch(0.3 0.06 155 / 0.4); }
-[data-accent="green"][data-theme="light"] { --accent: oklch(0.56 0.15 155); --accent-soft: oklch(0.92 0.05 155 / 0.6); }
-[data-accent="amber"] { --accent: oklch(0.78 0.15 75); --accent-soft: oklch(0.3 0.06 75 / 0.4); }
-[data-accent="amber"][data-theme="light"] { --accent: oklch(0.62 0.15 75); --accent-soft: oklch(0.94 0.07 75 / 0.6); }
-[data-accent="blue"] { --accent: oklch(0.72 0.15 235); --accent-soft: oklch(0.32 0.05 235 / 0.4); }
-[data-accent="blue"][data-theme="light"] { --accent: oklch(0.55 0.15 235); --accent-soft: oklch(0.93 0.06 235 / 0.5); }
+/* Accent presets — soft tints derive from the accent itself (alpha), matching the status pattern */
+[data-accent="violet"] { --accent: oklch(0.63 0.16 285); --accent-soft: oklch(0.63 0.16 285 / 0.15); }
+[data-accent="violet"][data-theme="light"] { --accent: oklch(0.51 0.16 285); --accent-soft: oklch(0.51 0.16 285 / 0.12); }
+[data-accent="green"] { --accent: oklch(0.7 0.145 160); --accent-soft: oklch(0.7 0.145 160 / 0.15); }
+[data-accent="green"][data-theme="light"] { --accent: oklch(0.545 0.135 160); --accent-soft: oklch(0.545 0.135 160 / 0.12); }
+[data-accent="amber"] { --accent: oklch(0.76 0.135 80); --accent-soft: oklch(0.76 0.135 80 / 0.15); }
+[data-accent="amber"][data-theme="light"] { --accent: oklch(0.6 0.125 80); --accent-soft: oklch(0.6 0.125 80 / 0.12); }
+[data-accent="blue"] { --accent: oklch(0.69 0.125 240); --accent-soft: oklch(0.69 0.125 240 / 0.15); }
+[data-accent="blue"][data-theme="light"] { --accent: oklch(0.53 0.125 245); --accent-soft: oklch(0.53 0.125 245 / 0.12); }
 
 /* Density */
 [data-density="compact"] { --row-gap: 10px; --pad: 14px; }
@@ -4990,7 +5263,10 @@ button.status-pill.ok:hover { border-color: var(--ok); }
   color: var(--fg-faint);
   font-variant-numeric: tabular-nums;
 }
-.sidebar .nav-item .kbd { margin-left: auto; }
+/* Shortcut hints reveal on hover only — rendered inline at rest they read as
+   counts ("Bugs 3" when 3 is the hotkey), which makes real counts untrustworthy. */
+.sidebar .nav-item .kbd { margin-left: auto; opacity: 0; transition: opacity 120ms ease; }
+.sidebar .nav-item:hover .kbd, .sidebar .nav-item.active .kbd { opacity: 1; }
 .sidebar .nav-item.active .count { color: var(--fg-muted); }
 
 .sidebar-footer {
@@ -5002,6 +5278,11 @@ button.status-pill.ok:hover { border-color: var(--ok); }
   background: linear-gradient(135deg, var(--accent), oklch(from var(--accent) l c calc(h + 40)));
   display: grid; place-items: center;
   font-weight: 600; font-size: 11.5px; color: var(--accent-contrast);
+}
+.avatar.avatar-muted {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
 }
 .sidebar-footer .who { display: flex; flex-direction: column; line-height: 1.2; }
 .sidebar-footer .who .name { font-size: 12.5px; font-weight: 500; }
@@ -5073,10 +5354,29 @@ button.status-pill.ok:hover { border-color: var(--ok); }
 .btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
 .btn.ghost:hover { background: var(--bg-hover); color: var(--fg); border-color: transparent; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); font-weight: 600; }
-.btn.primary:hover { filter: brightness(1.05); }
+/* Primary: subtle vertical gradient + inset top highlight — the "finished key cap"
+   read that flat fills lack. Hover lightens the gradient instead of filter:brightness
+   (which also brightens the label and looks like a glow, not a state). */
+.btn.primary {
+  background: linear-gradient(to bottom, oklch(from var(--accent) calc(l + 0.05) c h), var(--accent));
+  border-color: oklch(from var(--accent) calc(l - 0.07) c h);
+  color: var(--accent-contrast); font-weight: 600;
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.18), 0 1px 2px rgb(0 0 0 / 0.25);
+}
+.btn.primary:hover {
+  background: linear-gradient(to bottom, oklch(from var(--accent) calc(l + 0.08) c h), oklch(from var(--accent) calc(l + 0.02) c h));
+  border-color: oklch(from var(--accent) calc(l - 0.05) c h);
+}
 .btn.danger { color: var(--fail); }
 .btn.sm { padding: 3px 7px; font-size: 11.5px; border-radius: 5px; }
+.btn:active:not(:disabled) { background: var(--bg-elev-2); }
+.btn.primary:active:not(:disabled) {
+  background: oklch(from var(--accent) calc(l - 0.03) c h);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.2);
+}
+.btn:disabled, .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+.btn:disabled:hover { background: var(--bg-elev); border-color: var(--border); }
+.btn.ghost:disabled:hover { background: transparent; border-color: transparent; }
 
 .icon-btn {
   width: 28px; height: 28px;
@@ -5098,7 +5398,9 @@ button.status-pill.ok:hover { border-color: var(--ok); }
   overflow: hidden;
 }
 [data-card="flat"] .card { background: var(--bg-elev); border-color: transparent; }
-[data-card="elevated"] .card { box-shadow: var(--shadow-md); border-color: var(--border); }
+/* Elevated = hairline lift + 1px inner light edge along the top (catch-light), not a
+   floating drop shadow — heavy shadows on every card flatten the hierarchy for overlays. */
+[data-card="elevated"] .card { box-shadow: var(--shadow-sm), inset 0 1px 0 oklch(1 0 0 / 0.04); border-color: var(--border); }
 .card-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10px 14px; border-bottom: 1px solid var(--border);
@@ -5274,11 +5576,22 @@ button.status-pill.ok:hover { border-color: var(--ok); }
    Kanban
    ========================================================================== */
 .kanban-toolbar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 24px;
+  display: flex; flex-direction: column;
+  padding: 0 24px;
   border-bottom: 1px solid var(--border);
   position: sticky; top: 62px; background: var(--bg); z-index: 3;
-  overflow-x: auto;
+}
+.kt-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 0;
+}
+.kt-row + .kt-row {
+  border-top: 1px solid var(--border);
+}
+.kt-search {
+  width: 160px; flex-shrink: 0;
+  padding: 4px 10px; outline: none;
+  background: var(--bg-elev);
 }
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
@@ -5338,9 +5651,13 @@ button.status-pill.ok:hover { border-color: var(--ok); }
   padding: 10px 11px;
   cursor: pointer;
   display: flex; flex-direction: column; gap: 6px;
-  transition: border-color .08s ease, transform .08s ease;
+  transition: border-color .12s ease, background .12s ease, box-shadow .12s ease;
 }
-.tc-card:hover { border-color: var(--border-strong); }
+.tc-card:hover {
+  border-color: var(--border-strong);
+  background: oklch(from var(--bg-elev) calc(l + 0.012) c h);
+  box-shadow: var(--shadow-sm);
+}
 .tc-card .head { display: flex; align-items: center; gap: 6px; }
 .tc-card .tc-id { font-family: var(--font-mono); font-size: 11px; color: var(--fg-dim); }
 .tc-card h4 { margin: 0; font-size: 12.5px; font-weight: 500; line-height: 1.35; color: var(--fg); }
@@ -5498,7 +5815,7 @@ button.status-pill.ok:hover { border-color: var(--ok); }
   z-index: 41;
   display: flex; flex-direction: column;
   animation: slidein .2s ease;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-pop);
 }
 .drawer-head {
   padding: 12px 18px;
@@ -5546,7 +5863,7 @@ button.status-pill.ok:hover { border-color: var(--ok); }
   border-radius: 14px;
   display: flex; flex-direction: column;
   z-index: 50;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-pop);
   overflow: hidden;
   animation: slidein .2s ease;
 }
@@ -5671,9 +5988,20 @@ button.status-pill.ok:hover { border-color: var(--ok); }
 .swatch.active { border-color: var(--fg); }
 
 /* Scrollbars */
-*::-webkit-scrollbar { width: 10px; height: 10px; }
-*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; border: 2px solid var(--bg); }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb {
+  background: oklch(from var(--border-strong) l c h / 0.7);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
 *::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-corner { background: transparent; }
 
 /* Small screens */
 @media (max-width: 900px) {
@@ -6171,961 +6499,6 @@ select.inp { padding-right: 24px; }
 }
 
 
-/* === App extras === */
-/* ==========================================================================
-   Morbius Dashboard — design tokens
-   ========================================================================== */
-
-:root {
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-
-  /* Dark palette (default) */
-  --bg: oklch(0.16 0.01 270);
-  --bg-elev: oklch(0.19 0.012 270);
-  --bg-elev-2: oklch(0.22 0.014 270);
-  --bg-hover: oklch(0.24 0.016 270);
-  --bg-sunken: oklch(0.13 0.008 270);
-  --border: oklch(0.28 0.012 270);
-  --border-strong: oklch(0.36 0.014 270);
-  --fg: oklch(0.98 0.002 270);
-  --fg-muted: oklch(0.75 0.008 270);
-  --fg-dim: oklch(0.56 0.01 270);
-  --fg-faint: oklch(0.42 0.01 270);
-
-  --ok: oklch(0.72 0.16 155);
-  --ok-bg: oklch(0.32 0.05 155 / 0.35);
-  --fail: oklch(0.68 0.22 25);
-  --fail-bg: oklch(0.35 0.08 25 / 0.35);
-  --warn: oklch(0.78 0.15 75);
-  --warn-bg: oklch(0.38 0.05 75 / 0.35);
-  --info: oklch(0.72 0.15 235);
-  --info-bg: oklch(0.32 0.05 235 / 0.35);
-
-  /* Accent — violet default; overridable */
-  --accent: oklch(0.68 0.17 285);
-  --accent-contrast: oklch(0.99 0 0);
-  --accent-soft: oklch(0.3 0.08 285 / 0.4);
-
-  --radius-sm: 6px;
-  --radius: 10px;
-  --radius-lg: 14px;
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
-  --shadow-md: 0 6px 24px -8px rgb(0 0 0 / 0.4), 0 2px 6px -2px rgb(0 0 0 / 0.25);
-
-  --row-gap: 14px;
-  --pad: 20px;
-}
-
-[data-theme="light"] {
-  --bg: oklch(0.985 0.003 90);
-  --bg-elev: oklch(1 0 0);
-  --bg-elev-2: oklch(0.98 0.004 90);
-  --bg-hover: oklch(0.95 0.005 90);
-  --bg-sunken: oklch(0.96 0.004 90);
-  --border: oklch(0.9 0.006 90);
-  --border-strong: oklch(0.82 0.008 90);
-  --fg: oklch(0.18 0.01 270);
-  --fg-muted: oklch(0.38 0.01 270);
-  --fg-dim: oklch(0.55 0.008 270);
-  --fg-faint: oklch(0.7 0.006 270);
-
-  --ok: oklch(0.58 0.16 155);
-  --ok-bg: oklch(0.92 0.07 155 / 0.6);
-  --fail: oklch(0.55 0.22 25);
-  --fail-bg: oklch(0.94 0.07 25 / 0.6);
-  --warn: oklch(0.62 0.15 75);
-  --warn-bg: oklch(0.94 0.08 75 / 0.6);
-  --info: oklch(0.55 0.15 235);
-  --info-bg: oklch(0.93 0.06 235 / 0.5);
-
-  --accent: oklch(0.55 0.17 285);
-  --accent-soft: oklch(0.92 0.05 285 / 0.6);
-
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.05);
-  --shadow-md: 0 8px 24px -8px rgb(0 0 0 / 0.12), 0 2px 6px -2px rgb(0 0 0 / 0.06);
-}
-
-/* Accent presets */
-[data-accent="violet"] { --accent: oklch(0.68 0.17 285); --accent-soft: oklch(0.3 0.08 285 / 0.4); }
-[data-accent="violet"][data-theme="light"] { --accent: oklch(0.55 0.17 285); --accent-soft: oklch(0.92 0.05 285 / 0.6); }
-[data-accent="green"] { --accent: oklch(0.72 0.16 155); --accent-soft: oklch(0.3 0.06 155 / 0.4); }
-[data-accent="green"][data-theme="light"] { --accent: oklch(0.56 0.15 155); --accent-soft: oklch(0.92 0.05 155 / 0.6); }
-[data-accent="amber"] { --accent: oklch(0.78 0.15 75); --accent-soft: oklch(0.3 0.06 75 / 0.4); }
-[data-accent="amber"][data-theme="light"] { --accent: oklch(0.62 0.15 75); --accent-soft: oklch(0.94 0.07 75 / 0.6); }
-[data-accent="blue"] { --accent: oklch(0.72 0.15 235); --accent-soft: oklch(0.32 0.05 235 / 0.4); }
-[data-accent="blue"][data-theme="light"] { --accent: oklch(0.55 0.15 235); --accent-soft: oklch(0.93 0.06 235 / 0.5); }
-
-/* Density */
-[data-density="compact"] { --row-gap: 10px; --pad: 14px; }
-[data-density="sparse"] { --row-gap: 20px; --pad: 28px; }
-
-/* ==========================================================================
-   Base
-   ========================================================================== */
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; height: 100%; }
-body {
-  font-family: var(--font-sans);
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 13.5px;
-  line-height: 1.45;
-  letter-spacing: -0.005em;
-  font-feature-settings: "cv11", "ss01", "ss03";
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-#root { min-height: 100%; display: flex; flex-direction: column; }
-
-a { color: inherit; text-decoration: none; }
-button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
-input, textarea, select { font: inherit; color: inherit; }
-code, pre, .mono { font-family: var(--font-mono); }
-
-/* ==========================================================================
-   App shell
-   ========================================================================== */
-.app {
-  display: grid;
-  grid-template-columns: 232px 1fr;
-  grid-template-rows: 48px 1fr;
-  height: 100vh;
-  min-height: 0;
-}
-.app[data-layout="topnav"] {
-  grid-template-columns: 1fr;
-  grid-template-rows: 48px 44px 1fr;
-}
-
-/* Topbar */
-.topbar {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 14px 0 16px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  position: relative;
-  z-index: 10;
-}
-.topbar .brand {
-  display: flex; align-items: center; gap: 8px;
-  width: auto;
-  padding-left: 2px;
-}
-.brand-mark {
-  display: grid; place-items: center;
-}
-
-.topbar .project-switcher {
-  display: flex; align-items: center; gap: 6px;
-  padding: 5px 10px; border-radius: 6px;
-  background: transparent; border: 1px solid transparent;
-  color: var(--fg-muted);
-  font-size: 12.5px;
-}
-.topbar .project-switcher:hover { background: var(--bg-hover); color: var(--fg); }
-
-.topbar .search {
-  flex: 1; max-width: 520px; margin-inline: auto;
-  display: flex; align-items: center; gap: 8px;
-  padding: 5px 10px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--fg-dim);
-  font-size: 12.5px;
-  cursor: text;
-}
-.topbar .search:hover { border-color: var(--border-strong); }
-.topbar .search .kbd { margin-left: auto; }
-
-.topbar-right { display: flex; align-items: center; gap: 4px; margin-left: auto; }
-.topbar-right .icon-btn { width: 30px; height: 30px; }
-
-.kbd {
-  display: inline-flex; align-items: center; gap: 2px;
-  padding: 1px 5px; border-radius: 4px;
-  background: var(--bg-elev-2); border: 1px solid var(--border);
-  color: var(--fg-muted);
-  font-family: var(--font-mono); font-size: 10.5px; line-height: 1.4;
-}
-
-.status-pills {
-  display: flex; gap: 6px; align-items: center;
-  padding-right: 10px; margin-right: 6px;
-  border-right: 1px solid var(--border);
-  height: 30px;
-}
-.status-pill {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 7px; border-radius: 5px;
-  font-size: 11px; color: var(--fg-muted);
-  background: transparent;
-  font-variant-numeric: tabular-nums;
-  /* Trust pass: pills are now <button>s. Strip default browser chrome. */
-  border: 1px solid transparent;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-button.status-pill:hover { background: var(--bg-hover); color: var(--fg); }
-button.status-pill.fail:hover { border-color: var(--fail); }
-button.status-pill.ok:hover { border-color: var(--ok); }
-.status-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); }
-.status-pill.ok .dot { background: var(--ok); box-shadow: 0 0 0 3px oklch(from var(--ok) l c h / 0.18); }
-.status-pill.fail .dot { background: var(--fail); box-shadow: 0 0 0 3px oklch(from var(--fail) l c h / 0.18); }
-
-/* Sidebar */
-.sidebar {
-  grid-row: 2 / -1;
-  border-right: 1px solid var(--border);
-  background: var(--bg);
-  padding: 10px 8px;
-  overflow-y: auto;
-  display: flex; flex-direction: column; gap: 14px;
-  min-width: 0;
-}
-.app[data-layout="topnav"] .sidebar { display: none; }
-
-.sidebar .nav-group { display: flex; flex-direction: column; gap: 1px; }
-.sidebar .nav-group-label {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--fg-faint);
-  padding: 8px 10px 4px;
-  font-weight: 600;
-}
-.sidebar .nav-item {
-  display: flex; align-items: center; gap: 9px;
-  padding: 6px 9px;
-  border-radius: 6px;
-  color: var(--fg-muted);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  position: relative;
-  transition: background .1s ease, color .1s ease;
-}
-.sidebar .nav-item:hover { background: var(--bg-hover); color: var(--fg); }
-.sidebar .nav-item.active { background: var(--bg-elev); color: var(--fg); }
-.sidebar .nav-item.active::before {
-  content: ''; position: absolute; left: -8px; top: 6px; bottom: 6px;
-  width: 2px; border-radius: 0 2px 2px 0;
-  background: var(--accent);
-}
-.sidebar .nav-item .count {
-  margin-left: auto; font-family: var(--font-mono); font-size: 11px;
-  color: var(--fg-faint);
-  font-variant-numeric: tabular-nums;
-}
-.sidebar .nav-item .kbd { margin-left: auto; }
-.sidebar .nav-item.active .count { color: var(--fg-muted); }
-
-.sidebar-footer {
-  margin-top: auto; padding: 10px; border-top: 1px solid var(--border);
-  display: flex; align-items: center; gap: 10px;
-}
-.avatar {
-  width: 26px; height: 26px; border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), oklch(from var(--accent) l c calc(h + 40)));
-  display: grid; place-items: center;
-  font-weight: 600; font-size: 11.5px; color: var(--accent-contrast);
-}
-.sidebar-footer .who { display: flex; flex-direction: column; line-height: 1.2; }
-.sidebar-footer .who .name { font-size: 12.5px; font-weight: 500; }
-.sidebar-footer .who .role { font-size: 11px; color: var(--fg-faint); }
-
-/* Topnav layout */
-.topnav-tabs {
-  display: flex; align-items: center; gap: 2px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  overflow-x: auto;
-}
-.topnav-tabs .nav-item {
-  position: relative;
-  padding: 10px 12px;
-  color: var(--fg-muted); font-size: 13px; font-weight: 500;
-  border-radius: 0;
-  display: flex; align-items: center; gap: 8px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.topnav-tabs .nav-item:hover { color: var(--fg); }
-.topnav-tabs .nav-item.active { color: var(--fg); }
-.topnav-tabs .nav-item.active::after {
-  content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px;
-  background: var(--accent); border-radius: 2px 2px 0 0;
-}
-
-/* Main */
-.main {
-  overflow: auto;
-  min-width: 0;
-  background: var(--bg);
-  display: flex; flex-direction: column;
-}
-.view-header {
-  display: flex; align-items: flex-end; justify-content: space-between;
-  padding: 18px 24px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  position: sticky; top: 0; z-index: 4;
-}
-.view-header h1 {
-  font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -0.01em;
-  display: flex; align-items: center; gap: 10px;
-}
-.view-header .crumb { color: var(--fg-dim); font-weight: 500; font-size: 12.5px; }
-.view-header .sub { color: var(--fg-muted); font-size: 12.5px; margin-top: 3px; }
-.view-header .actions { display: flex; gap: 6px; align-items: center; }
-
-.view-body { padding: 18px 24px 32px; flex: 1; min-width: 0; }
-.view-body.pad-sm { padding: 14px 16px 24px; }
-
-/* ==========================================================================
-   Primitives
-   ========================================================================== */
-.btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-elev);
-  color: var(--fg);
-  font-size: 12.5px; font-weight: 500;
-  cursor: pointer;
-  transition: background .1s ease, border-color .1s ease;
-}
-.btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
-.btn.ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
-.btn.ghost:hover { background: var(--bg-hover); color: var(--fg); border-color: transparent; }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); font-weight: 600; }
-.btn.primary:hover { filter: brightness(1.05); }
-.btn.danger { color: var(--fail); }
-.btn.sm { padding: 3px 7px; font-size: 11.5px; border-radius: 5px; }
-
-.icon-btn {
-  width: 28px; height: 28px;
-  border-radius: 6px;
-  display: inline-grid; place-items: center;
-  color: var(--fg-muted);
-  cursor: pointer;
-  background: transparent;
-  border: 1px solid transparent;
-}
-.icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
-.icon-btn.active { background: var(--bg-elev); color: var(--fg); border-color: var(--border); }
-
-/* Card */
-.card {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-[data-card="flat"] .card { background: var(--bg-elev); border-color: transparent; }
-[data-card="elevated"] .card { box-shadow: var(--shadow-md); border-color: var(--border); }
-.card-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 14px; border-bottom: 1px solid var(--border);
-}
-.card-header h3 {
-  margin: 0; font-size: 12px; font-weight: 600;
-  color: var(--fg-muted); letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-.card-body { padding: 14px; }
-.card-body.plain { padding: 0; }
-
-/* Tag / pill */
-.pill {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  font-size: 11px; font-weight: 500;
-  background: var(--bg-elev-2); color: var(--fg-muted);
-  border: 1px solid var(--border);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .9; }
-.pill.sq { border-radius: 5px; }
-.pill.ok { color: var(--ok); background: var(--ok-bg); border-color: transparent; }
-.pill.fail { color: var(--fail); background: var(--fail-bg); border-color: transparent; }
-.pill.warn { color: var(--warn); background: var(--warn-bg); border-color: transparent; }
-.pill.info { color: var(--info); background: var(--info-bg); border-color: transparent; }
-.pill.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
-.pill.neutral { color: var(--fg-muted); }
-
-/* Hero metric */
-.metric {
-  display: flex; flex-direction: column; gap: 3px;
-}
-.metric .label {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--fg-faint); font-weight: 600;
-}
-.metric .value {
-  font-family: var(--font-mono); font-size: 26px; font-weight: 600;
-  letter-spacing: -0.02em; color: var(--fg);
-  font-variant-numeric: tabular-nums;
-  line-height: 1.05;
-}
-.metric .delta { font-size: 12px; color: var(--fg-muted); display: flex; align-items: center; gap: 5px; }
-.metric .delta.up { color: var(--ok); }
-.metric .delta.down { color: var(--fail); }
-
-/* Status dot */
-.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.status-dot.pass { background: var(--ok); box-shadow: 0 0 0 3px oklch(from var(--ok) l c h / 0.15); }
-.status-dot.fail { background: var(--fail); box-shadow: 0 0 0 3px oklch(from var(--fail) l c h / 0.15); }
-.status-dot.flaky { background: var(--warn); box-shadow: 0 0 0 3px oklch(from var(--warn) l c h / 0.15); }
-.status-dot.running { background: var(--info); animation: pulse 1.2s infinite; }
-.status-dot.none { background: var(--fg-faint); }
-
-@keyframes pulse {
-  0%, 100% { box-shadow: 0 0 0 0 oklch(from var(--info) l c h / 0.5); }
-  50% { box-shadow: 0 0 0 5px oklch(from var(--info) l c h / 0); }
-}
-
-/* Grid utilities */
-.grid { display: grid; gap: var(--row-gap); }
-.grid.g-12 { grid-template-columns: repeat(12, 1fr); }
-.col-3 { grid-column: span 3; }
-.col-4 { grid-column: span 4; }
-.col-5 { grid-column: span 5; }
-.col-6 { grid-column: span 6; }
-.col-7 { grid-column: span 7; }
-.col-8 { grid-column: span 8; }
-.col-9 { grid-column: span 9; }
-.col-12 { grid-column: span 12; }
-
-.row { display: flex; gap: 10px; align-items: center; }
-.row.between { justify-content: space-between; }
-.row.wrap { flex-wrap: wrap; }
-.stack { display: flex; flex-direction: column; gap: 10px; }
-
-.divider { height: 1px; background: var(--border); margin: 0; }
-.vr { width: 1px; height: 18px; background: var(--border); }
-
-/* ==========================================================================
-   Dashboard-specific
-   ========================================================================== */
-.hero-stats {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr 1fr 1fr 1fr;
-  gap: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--bg-elev);
-}
-.hero-stats .cell {
-  padding: 16px 18px;
-  border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; justify-content: space-between;
-  min-height: 118px;
-  position: relative;
-}
-.hero-stats .cell:last-child { border-right: 0; }
-.hero-stats .cell .mini-bar {
-  display: flex; align-items: flex-end; gap: 2px; height: 26px; margin-top: 6px;
-}
-.hero-stats .cell .mini-bar span {
-  flex: 1; background: var(--accent-soft); border-radius: 1px;
-  min-width: 2px;
-}
-.hero-stats .cell .mini-bar span.hi { background: var(--accent); }
-
-/* Category health */
-.health-row {
-  display: grid; grid-template-columns: 1fr 42px 160px 42px;
-  gap: 10px; align-items: center;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-}
-.health-row:last-child { border-bottom: 0; }
-.health-row:hover { background: var(--bg-hover); }
-.health-row .name { font-size: 12.5px; font-weight: 500; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.health-row .name .label-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.health-row .pct { font-family: var(--font-mono); font-size: 12px; color: var(--fg-muted); text-align: right; }
-.health-row .count { font-family: var(--font-mono); font-size: 11px; color: var(--fg-faint); text-align: right; }
-.bar {
-  height: 6px; border-radius: 3px; background: var(--bg-sunken); overflow: hidden; display: flex;
-}
-.bar span { display: block; height: 100%; }
-.bar .pass { background: var(--ok); }
-.bar .fail { background: var(--fail); }
-.bar .flaky { background: var(--warn); }
-.bar .none { background: var(--fg-faint); opacity: .3; }
-
-/* Sparkline */
-.sparkline { width: 100%; height: 56px; display: block; }
-
-/* Activity feed */
-.activity-item {
-  display: grid; grid-template-columns: 16px 1fr auto;
-  gap: 10px; align-items: flex-start;
-  padding: 9px 0;
-  border-bottom: 1px dashed var(--border);
-  font-size: 12.5px;
-}
-.activity-item:last-child { border-bottom: 0; }
-.activity-item .act-icon { margin-top: 2px; color: var(--fg-dim); }
-.activity-item .act-time { font-family: var(--font-mono); font-size: 11px; color: var(--fg-faint); }
-.activity-item .act-body strong { font-weight: 600; color: var(--fg); }
-.activity-item .act-body .sub { color: var(--fg-muted); font-size: 11.5px; display: block; margin-top: 1px; }
-.activity-item .act-body .mono { color: var(--fg-muted); font-size: 11.5px; }
-
-/* Table */
-.tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
-.tbl th {
-  text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--fg-faint); font-weight: 600;
-  padding: 8px 12px; border-bottom: 1px solid var(--border);
-  background: var(--bg-elev);
-  position: sticky; top: 0;
-}
-.tbl td {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  color: var(--fg);
-  vertical-align: middle;
-}
-.tbl tr { transition: background .08s ease; }
-.tbl tr:hover td { background: var(--bg-hover); cursor: pointer; }
-.tbl .id { font-family: var(--font-mono); color: var(--fg-muted); font-size: 12px; }
-
-/* ==========================================================================
-   Kanban
-   ========================================================================== */
-.kanban-toolbar {
-  display: flex; flex-direction: column;
-  padding: 0 24px;
-  border-bottom: 1px solid var(--border);
-  position: sticky; top: 62px; background: var(--bg); z-index: 3;
-}
-.kt-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 0;
-}
-.kt-row + .kt-row {
-  border-top: 1px solid var(--border);
-}
-.kt-search {
-  width: 160px; flex-shrink: 0;
-  padding: 4px 10px; outline: none;
-  background: var(--bg-elev);
-}
-.chip {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 4px 9px; border-radius: 999px;
-  font-size: 11.5px; font-weight: 500;
-  color: var(--fg-muted);
-  background: transparent;
-  border: 1px solid var(--border);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.chip:hover { border-color: var(--border-strong); color: var(--fg); }
-.chip.active { background: var(--bg-elev-2); color: var(--fg); border-color: var(--border-strong); }
-.chip .n { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-faint); }
-.chip.active .n { color: var(--fg-muted); }
-
-.kanban {
-  display: flex; gap: 14px;
-  padding: 16px 24px 24px;
-  overflow-x: auto;
-  min-height: calc(100vh - 48px - 62px - 56px);
-  align-items: flex-start;
-}
-.kanban-col {
-  /* Trust pass: 240px lets all 5 status columns fit on a 1440px laptop without horizontal scroll. */
-  flex: 1 1 240px;
-  min-width: 240px;
-  max-width: 320px;
-  display: flex; flex-direction: column;
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  max-height: calc(100vh - 48px - 62px - 56px - 16px);
-  overflow: hidden;
-}
-.kanban-col-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elev);
-}
-.kanban-col-head .title {
-  display: flex; align-items: center; gap: 7px;
-  font-size: 12px; font-weight: 600; color: var(--fg);
-  text-transform: uppercase; letter-spacing: 0.04em;
-}
-.kanban-col-body {
-  padding: 8px; display: flex; flex-direction: column; gap: 7px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.tc-card {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 11px;
-  cursor: pointer;
-  display: flex; flex-direction: column; gap: 6px;
-  transition: border-color .08s ease, transform .08s ease;
-}
-.tc-card:hover { border-color: var(--border-strong); }
-.tc-card .head { display: flex; align-items: center; gap: 6px; }
-.tc-card .tc-id { font-family: var(--font-mono); font-size: 11px; color: var(--fg-dim); }
-.tc-card h4 { margin: 0; font-size: 12.5px; font-weight: 500; line-height: 1.35; color: var(--fg); }
-.tc-card .meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-
-/* Compact row */
-.tc-row {
-  display: grid; grid-template-columns: 70px 1fr auto auto;
-  gap: 10px; align-items: center;
-  padding: 7px 11px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg-elev);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.tc-row:hover { border-color: var(--border-strong); }
-.tc-row .tc-id { font-family: var(--font-mono); font-size: 11px; color: var(--fg-muted); }
-
-/* ==========================================================================
-   QA split-panel (PMAgent-style: left plan list + right document)
-   ========================================================================== */
-.qa-master {
-  display: flex;
-  height: calc(100vh - 48px - 62px - 56px);
-  border-top: 1px solid var(--border);
-}
-.qa-list {
-  width: 300px; flex-shrink: 0;
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-  background: var(--bg-sunken);
-}
-.qa-coverage-bar { padding: 12px 14px; border-bottom: 1px solid var(--border); }
-.qa-coverage-label {
-  font-size: 10px; color: var(--fg-faint);
-  text-transform: uppercase; letter-spacing: 0.1em;
-  font-family: var(--font-mono); margin-bottom: 6px;
-}
-.qa-bar-track { height: 4px; border-radius: 3px; background: var(--bg-elev-2); overflow: hidden; }
-.qa-bar-fill { height: 100%; border-radius: 3px; transition: width .2s ease; }
-.qa-coverage-summary { font-size: 10px; color: var(--fg-faint); font-family: var(--font-mono); margin-top: 6px; }
-.qa-section-label {
-  font-size: 10px; color: var(--fg-faint);
-  letter-spacing: 0.1em; text-transform: uppercase;
-  padding: 10px 14px 4px;
-  display: flex; align-items: center;
-}
-.qa-plan-item {
-  padding: 7px 14px; cursor: pointer;
-  display: flex; align-items: center; gap: 8px;
-  border-left: 2px solid transparent;
-}
-.qa-plan-item:hover { background: var(--bg-elev); }
-.qa-plan-item.active { background: var(--bg-elev); border-left-color: var(--accent); }
-.qa-plan-dot { display: inline-flex; flex-shrink: 0; }
-.qa-plan-id { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-faint); flex-shrink: 0; }
-.qa-plan-label {
-  font-size: 12.5px; color: var(--fg);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.qa-detail { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-.qa-detail-empty { align-items: center; justify-content: center; }
-.qa-detail-head {
-  display: flex; align-items: center; gap: 10px;
-  padding: 14px 20px; border-bottom: 1px solid var(--border);
-}
-.qa-detail-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
-.qa-detail-body { padding: 18px 20px; overflow-y: auto; flex: 1; }
-.qa-meta-grid {
-  display: flex; flex-wrap: wrap; gap: 8px 22px;
-  padding-bottom: 16px; margin-bottom: 16px;
-  border-bottom: 1px solid var(--border);
-}
-.qa-meta { display: flex; flex-direction: column; gap: 2px; }
-.qa-meta .k {
-  font-size: 9.5px; color: var(--fg-faint);
-  text-transform: uppercase; letter-spacing: 0.08em;
-}
-.qa-meta span:last-child { font-size: 12.5px; color: var(--fg); }
-.md-doc { font-size: 13px; line-height: 1.65; color: var(--fg-muted); }
-.md-doc h1, .md-doc h2, .md-doc h3 { color: var(--fg); margin: 18px 0 8px; }
-.md-doc h1 { font-size: 17px; } .md-doc h2 { font-size: 14px; } .md-doc h3 { font-size: 12.5px; }
-.md-doc code { font-family: var(--font-mono); font-size: 11.5px; background: var(--bg-elev); padding: 1px 5px; border-radius: 4px; }
-.md-doc table { border-collapse: collapse; font-size: 12px; margin: 10px 0; }
-.md-doc th, .md-doc td { border: 1px solid var(--border); padding: 5px 9px; text-align: left; }
-.md-doc th { background: var(--bg-elev); }
-.md-doc ul, .md-doc ol { padding-left: 20px; }
-
-/* Automation Planner (E-028) */
-.ap-chip { font-size: 10px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 10px; }
-.ap-chip b { font-family: var(--font-mono); }
-.ap-row { display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-bottom: 1px solid var(--bg-elev); }
-.ap-row:hover { background: var(--bg-elev); }
-.ap-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.ap-row-title { font-size: 12.5px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ap-row-meta { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--fg-faint); margin-top: 2px; }
-.ap-select { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; padding: 3px 5px; cursor: pointer; }
-.ap-flow { border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px; cursor: pointer; }
-.ap-flow:hover { border-color: var(--border-strong); }
-.ap-flow.active { border-color: var(--accent); background: var(--bg-elev); }
-.ap-flow-head { display: flex; align-items: center; gap: 8px; }
-.ap-flow-id { font-size: 11px; color: var(--fg-faint); }
-.ap-flow-name { font-size: 13.5px; font-weight: 600; flex: 1; }
-.ap-flow-status { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 9px; border: 1px solid var(--border); color: var(--fg-faint); }
-.ap-flow-status[data-st="passing"] { color: #45E0A8; border-color: #45E0A8; }
-.ap-flow-status[data-st="written"] { color: #3B82F6; border-color: #3B82F6; }
-.ap-flow-status[data-st="scaffolded"] { color: #F5A623; border-color: #F5A623; }
-.ap-flow-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
-.ap-flow-rat { font-size: 11.5px; color: var(--fg-muted); margin-top: 7px; line-height: 1.5; }
-.ap-tc { font-size: 9.5px; color: var(--fg-faint); background: var(--bg-elev); padding: 1px 5px; border-radius: 4px; }
-.ap-blocker { font-size: 11px; color: #F5A623; margin-top: 8px; }
-.ap-legend { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 7px; }
-.ap-legend-row { display: flex; gap: 8px; font-size: 11px; }
-.ap-legend-key { color: var(--fg); font-weight: 600; min-width: 110px; }
-.ap-legend-meta { color: var(--fg-muted); }
-.ap-legend-meta code { font-family: var(--font-mono); font-size: 10px; color: var(--accent); }
-.ap-draft { margin-top: 8px; font-size: 11px; }
-.ap-draft summary { cursor: pointer; color: var(--fg-muted); }
-.ap-yaml { background: var(--bg-sunken); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5; overflow-x: auto; max-height: 320px; white-space: pre; margin-top: 6px; }
-
-/* ==========================================================================
-   Device matrix
-   ========================================================================== */
-.matrix {
-  width: 100%; border-collapse: separate; border-spacing: 0;
-  font-size: 12.5px;
-}
-.matrix th, .matrix td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: center; }
-.matrix th:first-child, .matrix td:first-child { text-align: left; }
-.matrix th { background: var(--bg-elev); position: sticky; top: 0; z-index: 1; font-weight: 600; font-size: 11px; color: var(--fg-muted); }
-.matrix tbody tr:hover td { background: var(--bg-hover); }
-.matrix .cell-dot { display: inline-block; width: 16px; height: 16px; border-radius: 4px; }
-.matrix .cell-dot.pass { background: var(--ok-bg); box-shadow: inset 0 0 0 1.5px var(--ok); }
-.matrix .cell-dot.fail { background: var(--fail-bg); box-shadow: inset 0 0 0 1.5px var(--fail); }
-.matrix .cell-dot.flaky { background: var(--warn-bg); box-shadow: inset 0 0 0 1.5px var(--warn); }
-.matrix .cell-dot.none { background: transparent; box-shadow: inset 0 0 0 1px var(--border); }
-
-/* ==========================================================================
-   Right panel (detail) + chat drawer
-   ========================================================================== */
-.drawer-backdrop {
-  position: fixed; inset: 0; background: oklch(0 0 0 / 0.35);
-  backdrop-filter: blur(2px);
-  z-index: 40; animation: fade .15s ease;
-}
-@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slidein { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-
-.drawer {
-  position: fixed; right: 0; top: 0; bottom: 0;
-  width: min(560px, 100vw);
-  background: var(--bg);
-  border-left: 1px solid var(--border);
-  z-index: 41;
-  display: flex; flex-direction: column;
-  animation: slidein .2s ease;
-  box-shadow: var(--shadow-md);
-}
-.drawer-head {
-  padding: 12px 18px;
-  display: flex; align-items: center; gap: 10px;
-  border-bottom: 1px solid var(--border);
-}
-.drawer-head .dr-id { font-family: var(--font-mono); color: var(--fg-muted); font-size: 12px; }
-.drawer-head h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
-.drawer-body { padding: 18px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 18px; }
-.drawer-body .sec-title {
-  font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--fg-faint);
-  margin-bottom: 8px;
-}
-.drawer-body .pair {
-  display: grid; grid-template-columns: 100px 1fr; gap: 10px;
-  padding: 6px 0; font-size: 12.5px;
-  border-bottom: 1px dashed var(--border);
-}
-.drawer-body .pair:last-child { border-bottom: 0; }
-.drawer-body .pair .k { color: var(--fg-faint); }
-
-.yaml-block {
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  line-height: 1.55;
-  color: var(--fg-muted);
-  white-space: pre;
-  overflow-x: auto;
-}
-.yaml-block .k { color: var(--accent); }
-.yaml-block .s { color: var(--ok); }
-.yaml-block .c { color: var(--fg-faint); font-style: italic; }
-
-/* Chat */
-.chat-drawer {
-  position: fixed; right: 12px; bottom: 12px;
-  width: 400px; height: 560px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  display: flex; flex-direction: column;
-  z-index: 50;
-  box-shadow: var(--shadow-md);
-  overflow: hidden;
-  animation: slidein .2s ease;
-}
-.chat-drawer .chat-head {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 8px;
-}
-.chat-drawer .chat-body {
-  flex: 1; overflow-y: auto;
-  padding: 14px; display: flex; flex-direction: column; gap: 12px;
-  background: var(--bg);
-}
-.chat-msg { display: flex; gap: 9px; font-size: 12.5px; line-height: 1.5; }
-.chat-msg.user { flex-direction: row-reverse; }
-.chat-msg .bubble {
-  padding: 8px 11px; border-radius: 10px;
-  max-width: 80%;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-}
-.chat-msg.user .bubble { background: var(--accent-soft); border-color: transparent; }
-.chat-msg .bubble p { margin: 0; }
-.chat-msg .bubble code {
-  background: var(--bg-sunken); padding: 1px 5px; border-radius: 4px;
-  font-size: 11px;
-}
-.chat-avatar {
-  width: 24px; height: 24px; border-radius: 50%;
-  display: grid; place-items: center;
-  background: var(--accent); color: var(--accent-contrast);
-  font-size: 11px; font-weight: 600;
-  flex-shrink: 0;
-}
-.chat-msg.user .chat-avatar { background: var(--bg-elev-2); color: var(--fg-muted); border: 1px solid var(--border); }
-
-.chat-composer {
-  padding: 10px; border-top: 1px solid var(--border);
-  background: var(--bg-elev);
-}
-.chat-composer textarea {
-  width: 100%;
-  background: var(--bg); border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 10px; font-size: 12.5px; resize: none;
-  min-height: 60px;
-  outline: none;
-}
-.chat-composer textarea:focus { border-color: var(--accent); }
-.chat-composer .row { margin-top: 8px; justify-content: space-between; }
-.chips-row { display: flex; gap: 4px; padding: 0 10px 8px; flex-wrap: wrap; }
-.chips-row .chip { font-size: 11px; padding: 3px 7px; }
-
-/* Command palette */
-.cmd-backdrop {
-  position: fixed; inset: 0; background: oklch(0 0 0 / 0.3);
-  backdrop-filter: blur(3px);
-  z-index: 60; display: grid; place-items: flex-start center; padding-top: 120px;
-}
-.cmd {
-  width: min(560px, 94vw);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-md);
-  display: flex; flex-direction: column;
-  overflow: hidden;
-}
-.cmd input {
-  border: 0; outline: 0;
-  padding: 14px 16px; font-size: 14px;
-  background: transparent; color: var(--fg);
-  border-bottom: 1px solid var(--border);
-}
-.cmd-list { max-height: 320px; overflow-y: auto; padding: 6px; }
-.cmd-item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 10px; border-radius: 7px; font-size: 13px;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.cmd-item.active, .cmd-item:hover { background: var(--bg-hover); color: var(--fg); }
-.cmd-item .kbd { margin-left: auto; }
-
-/* Tweaks panel */
-.tweaks-panel {
-  position: fixed; right: 16px; bottom: 16px;
-  width: 280px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-md);
-  z-index: 55;
-  overflow: hidden;
-  animation: slidein .2s ease;
-}
-.tweaks-panel .tw-head {
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: space-between;
-  font-weight: 600; font-size: 12px;
-}
-.tweaks-panel .tw-body { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
-.tw-row { display: flex; flex-direction: column; gap: 6px; }
-.tw-row .lbl { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-faint); font-weight: 600; }
-.tw-seg {
-  display: flex; background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
-  padding: 2px;
-}
-.tw-seg button {
-  flex: 1; padding: 4px 8px; border-radius: 5px;
-  font-size: 11.5px; color: var(--fg-muted);
-}
-.tw-seg button.active { background: var(--bg-elev-2); color: var(--fg); }
-
-.swatch {
-  width: 20px; height: 20px; border-radius: 50%;
-  border: 2px solid var(--border);
-  cursor: pointer;
-  display: inline-block;
-}
-.swatch.active { border-color: var(--fg); }
-
-/* Scrollbars */
-*::-webkit-scrollbar { width: 10px; height: 10px; }
-*::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; border: 2px solid var(--bg); }
-*::-webkit-scrollbar-track { background: transparent; }
-
-/* Small screens */
-@media (max-width: 900px) {
-  .app { grid-template-columns: 1fr; }
-  .sidebar { display: none; }
-  .hero-stats { grid-template-columns: repeat(2, 1fr); }
-  .hero-stats .cell { border-bottom: 1px solid var(--border); }
-}
-
 /* ====== ⌘K Search Modal ====== */
 .srch-overlay {
   position: fixed; inset: 0; z-index: 9000;
@@ -7136,7 +6509,7 @@ button.status-pill.ok:hover { border-color: var(--ok); }
 .srch-modal {
   width: 560px; max-width: calc(100vw - 32px);
   background: var(--bg-elev); border: 1px solid var(--border);
-  border-radius: 12px; box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+  border-radius: 12px; box-shadow: var(--shadow-pop);
   overflow: hidden; display: flex; flex-direction: column;
 }
 .srch-input-row {
@@ -7323,14 +6696,74 @@ button.status-pill.ok:hover { border-color: var(--ok); }
 }
 .live-pill {
   gap: 6px;
-  color: var(--pass);
-  border-color: color-mix(in srgb, var(--pass) 30%, transparent);
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
 }
 .live-dot {
   width: 6px; height: 6px; border-radius: 50%;
-  background: var(--pass);
+  background: var(--ok);
   flex-shrink: 0;
   animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* ==========================================================================
+   Production polish — selection, focus, segmented chip groups, empty states.
+   Kept last on purpose: the :focus-visible reset must win source order against
+   per-component "outline: none" rules of equal specificity.
+   ========================================================================== */
+::selection { background: oklch(from var(--accent) l c h / 0.35); }
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid oklch(from var(--accent) l c h / 0.8);
+  outline-offset: 1px;
+}
+
+/* Segmented chip group — visually bind related chips (e.g. Ready / Needs
+   review / All scope) so they don't read as part of the adjacent filter row. */
+.chip-group {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.chip-group .chip { border-color: transparent; }
+.chip-group .chip:hover { border-color: transparent; background: var(--bg-hover); }
+.chip-group .chip.active { background: var(--bg-elev-2); border-color: var(--border-strong); }
+
+/* Empty state — shared look for "nothing here yet" slots (kanban columns,
+   run stream, matrices). Quietly informative, never a bare void. */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px;
+  padding: 22px 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-dim);
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.5;
+}
+.empty-state .es-hint { color: var(--fg-faint); font-size: 11.5px; }
+
+/* Drawer head: id/status/actions on row 1, full title wraps on its own row. */
+.drawer-head { flex-wrap: wrap; row-gap: 4px; }
+.drawer-head h2 {
+  flex-basis: 100%; order: 10;
+  white-space: normal; line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* ⌘K modal entrance */
+@keyframes pop-in { from { opacity: 0; transform: scale(0.985) translateY(-4px); } to { opacity: 1; transform: none; } }
+.srch-modal { animation: pop-in 140ms cubic-bezier(0.2, 0.9, 0.3, 1); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
   `;
@@ -7384,12 +6817,14 @@ function getFlowStatus(qaPlanId, testCases) {
 }
 
 async function loadMorbiusData() {
-  const [testsRes, bugsRes, dashRes, maestroRes, projectsRes] = await Promise.all([
+  const [testsRes, bugsRes, dashRes, maestroRes, projectsRes, planRes, plansRes] = await Promise.all([
     fetch('/api/tests'),
     fetch('/api/bugs'),
     fetch('/api/dashboard'),
     fetch('/api/maestro-tests'),
     fetch('/api/projects'),
+    fetch('/api/automation-plan'),
+    fetch('/api/plans'),
   ]);
 
   const testsRaw    = testsRes.ok    ? await testsRes.json()    : [];
@@ -7397,11 +6832,43 @@ async function loadMorbiusData() {
   const dash        = dashRes.ok     ? await dashRes.json()     : {};
   const maestroRaw  = maestroRes.ok  ? await maestroRes.json()  : {};
   const projData    = projectsRes.ok ? await projectsRes.json() : {};
+  const planData    = planRes.ok     ? await planRes.json()     : {};
+  const PLANS       = plansRes.ok    ? await plansRes.json()     : { items: [], releases: [] };
+
+  // Phase 2: which cards can't run yet. Flow blockers carry the human reason (e.g. "Firebase
+  // allowedGroups: add test group ID"); candidate.decision==='blocked' marks the card. testId → reason.
+  const blockedMap = {};
+  (planData.flows || []).forEach(f => {
+    const reason = (f.blockers || []).join('; ');
+    if (reason) (f.testIds || []).forEach(tid => { if (!blockedMap[tid]) blockedMap[tid] = reason; });
+  });
+  (planData.candidates || []).forEach(c => {
+    if (c.decision !== 'blocked' || blockedMap[c.testId]) return;
+    let reason = c.reason || '';
+    if (!reason && c.flowId) {
+      const f = (planData.flows || []).find(x => x.id === c.flowId);
+      if (f && (f.blockers || []).length) reason = f.blockers.join('; ');
+    }
+    blockedMap[c.testId] = reason || 'Blocked in automation plan';
+  });
+
+  // Phase 3: which cards actually have a runnable flow — a direct link or a written automation-plan
+  // flow (one with on-disk YAML). Used for honest per-card automation coverage.
+  const writtenFlowIds = new Set(Object.keys(planData.flowFiles || {}));
+  const automatedSet = new Set();
+  (planData.flows || []).forEach(f => {
+    if (writtenFlowIds.has(f.id) || f.status === 'written' || f.status === 'passing') {
+      (f.testIds || []).forEach(tid => automatedSet.add(tid));
+    }
+  });
 
   // ── Test Cases ──────────────────────────────────────────────
   const TEST_CASES = (testsRaw || []).map(t => ({
     id: t.id,
-    title: t.title || '',
+    // Imported titles all carry a "— Test Plan" suffix: zero information, repeated
+    // 203× in every table/list/card. Strip at the projection so every surface benefits;
+    // the markdown on disk is untouched.
+    title: (t.title || '').replace(/\\s*—\\s*Test Plan\\s*$/i, ''),
     cat: t.category || '',
     type: t.scenario || 'Flow',
     status: t.status || 'not-run',
@@ -7412,6 +6879,10 @@ async function loadMorbiusData() {
     ),
     lastRun: timeAgo(t.updated || t.created),
     owner: t.owner || 'SD',
+    blocked: !!blockedMap[t.id],
+    blockedReason: blockedMap[t.id] || '',
+    automated: !!(t.maestroFlowAndroid || t.maestroFlowIos || t.maestroFlow) || automatedSet.has(t.id),
+    story: (t.pmagentSource && t.pmagentSource.storyId) ? String(t.pmagentSource.storyId).toUpperCase() : '',
   }));
 
   // ── Bugs ────────────────────────────────────────────────────
@@ -7519,6 +6990,7 @@ async function loadMorbiusData() {
     TEST_CASES, BUGS, CATEGORIES, MAESTRO_FLOWS,
     RUN_HISTORY, ACTIVITY, SAMPLE_YAML,
     PROJECTS, ACTIVE_PROJECT, ACTIVE_PROJECT_CONFIG,
+    PLANS,
   };
 }
 
@@ -7662,8 +7134,11 @@ function HealthBar({ pass, fail, flaky, notRun }) {
   );
 }
 
-function Avatar({ initials, size = 22 }) {
-  return <div className="avatar" style={{ width: size, height: size, fontSize: Math.round(size*0.44) }}>{initials}</div>;
+function Avatar({ initials, size = 22, muted = size <= 20 }) {
+  // Small avatars live in dense data surfaces (tables, kanban cards, drawer pairs)
+  // where a column of saturated gradient circles outshouts the actual data — those
+  // render neutral. The gradient identity mark stays for profile-scale avatars.
+  return <div className={muted ? "avatar avatar-muted" : "avatar"} style={{ width: size, height: size, fontSize: Math.round(size*0.44) }}>{initials}</div>;
 }
 
 function Empty({ title, hint }) {
@@ -7732,10 +7207,12 @@ function DashboardView({ onSelectTest, onSelectBug, onNavigate }) {
   const priorityLabel = priorityParts.length ? priorityParts.join(' · ') : 'no critical bugs';
   const jiraLinked = openBugs.filter(b => b.jira).length;
 
-  // Coverage: % of test cases that have automation (flows / total TCs)
+  // Coverage: % of test cases that actually have a runnable flow (direct link or a written
+  // automation-plan flow) — true per-card automation, not the old flow-count vs card-count proxy.
   const flowCount = (MAESTRO_FLOWS||[]).length;
-  const coveragePct = TEST_CASES.length > 0 ? Math.round(Math.min(flowCount, TEST_CASES.length) / TEST_CASES.length * 100) : 0;
-  const coverageLabel = flowCount + ' flows · ' + TEST_CASES.length + ' TCs';
+  const automatedCount = TEST_CASES.filter(t => t.automated).length;
+  const coveragePct = TEST_CASES.length > 0 ? Math.round(automatedCount / TEST_CASES.length * 100) : 0;
+  const coverageLabel = automatedCount + '/' + TEST_CASES.length + ' cases automated · ' + flowCount + ' flows';
 
   const iconFor = { fail:Icon.fail, run:Icon.play, bug:Icon.bug, edit:Icon.edit, sync:Icon.sync, check:Icon.check, warn:Icon.warn, import:Icon.import };
 
@@ -7745,7 +7222,12 @@ function DashboardView({ onSelectTest, onSelectBug, onNavigate }) {
         <div className="cell">
           <div className="metric">
             <div className="label">Pass rate</div>
-            <div className="value">{totals.passRate}<span style={{fontSize:16, color:"var(--fg-muted)"}}>%</span></div>
+            {/* Em-dash until something has run — a red "0%" before the first run
+                reads as "everything is failing", which is false. */}
+            {totals.executed > 0
+              ? <div className="value">{totals.passRate}<span style={{fontSize:16, color:"var(--fg-muted)"}}>%</span></div>
+              : <div className="value" style={{color:"var(--fg-dim)"}}>—</div>
+            }
             {totals.executed > 0
               ? <div className="delta"><span style={{color:"var(--fg-faint)"}}>{totals.executed} of {totals.total} tests executed ({totals.executedPct}%)</span></div>
               : <div className="delta"><span style={{color:"var(--fg-faint)"}}>No tests executed yet — {totals.total} in catalog</span></div>
@@ -7773,7 +7255,8 @@ function DashboardView({ onSelectTest, onSelectBug, onNavigate }) {
         <div className="cell">
           <div className="metric">
             <div className="label">Flaky</div>
-            <div className="value" style={{color:"var(--warn)"}}>{totals.flaky}</div>
+            {/* Status colors mean "needs attention" — a zero is calm, keep it neutral. */}
+            <div className="value" style={totals.flaky > 0 ? {color:"var(--warn)"} : undefined}>{totals.flaky}</div>
             <div className="delta">{flaky.length} flaky tests</div>
           </div>
           {flaky[0] && <div style={{fontSize:11, color:"var(--fg-faint)", marginTop:6}}>Top offender · <span className="mono">{flaky[0].id}</span></div>}
@@ -7781,7 +7264,7 @@ function DashboardView({ onSelectTest, onSelectBug, onNavigate }) {
         <div className="cell">
           <div className="metric">
             <div className="label">Open bugs</div>
-            <div className="value" style={{color:"var(--fail)"}}>{openBugs.length}</div>
+            <div className="value" style={openBugs.length > 0 ? {color:"var(--fail)"} : undefined}>{openBugs.length}</div>
             <div className="delta">{priorityLabel}</div>
           </div>
           {jiraLinked > 0 && <div style={{fontSize:11, color:"var(--fg-faint)", marginTop:6}}>{jiraLinked} linked to Jira</div>}
@@ -7798,8 +7281,8 @@ function DashboardView({ onSelectTest, onSelectBug, onNavigate }) {
             if (projectType === 'web') {
               return (
                 <div style={{fontSize:11, color:"var(--fg-faint)", marginTop:6, display:'flex', gap:6, flexWrap:'wrap'}}>
-                  <span className="pill sq" style={{color:'#7C5CFF', borderColor:'#7C5CFF'}}><span className="dot" style={{background:'#7C5CFF'}}/>Headless</span>
-                  <span className="pill sq" style={{color:'#7C5CFF', borderColor:'#7C5CFF'}}><span className="dot" style={{background:'#7C5CFF'}}/>Visual</span>
+                  <span className="pill sq accent"><span className="dot"/>Headless</span>
+                  <span className="pill sq accent"><span className="dot"/>Visual</span>
                 </div>
               );
             }
@@ -7825,7 +7308,9 @@ function DashboardView({ onSelectTest, onSelectBug, onNavigate }) {
               {catHealth.slice(0,12).map(c => (
                 <div className="health-row" key={c.slug}>
                   <div className="name">
-                    <StatusDot status={c.pct>90?"pass":c.pct>70?"flaky":"fail"}/>
+                    {/* Gray until the category has actually executed something — 10 red
+                        dots on a fresh import is alarm fatigue, not signal. */}
+                    <StatusDot status={(c.pass + c.fail + c.flaky) === 0 ? "none" : c.pct>90?"pass":c.pct>70?"flaky":"fail"}/>
                     <span className="label-text">{c.name}</span>
                   </div>
                   <div className="pct">{c.pct}%</div>
@@ -7839,7 +7324,7 @@ function DashboardView({ onSelectTest, onSelectBug, onNavigate }) {
           <div className="grid g-12" style={{marginTop:"var(--row-gap)"}}>
             <div className="col-6">
               <div className="card">
-                <div className="card-header"><h3>Flaky tests</h3><span className="pill warn"><span className="dot"/>{flaky.length}</span></div>
+                <div className="card-header"><h3>Flaky tests</h3><span className={\`pill \${flaky.length > 0 ? "warn" : ""}\`}><span className="dot"/>{flaky.length}</span></div>
                 <div className="card-body plain">
                   {flaky.slice(0,6).map(t => (
                     <div key={t.id} className="health-row" style={{gridTemplateColumns:"78px 1fr auto"}} onClick={()=>onSelectTest(t)}>
@@ -7853,7 +7338,7 @@ function DashboardView({ onSelectTest, onSelectBug, onNavigate }) {
             </div>
             <div className="col-6">
               <div className="card">
-                <div className="card-header"><h3>Recent bugs</h3><span className="pill fail"><span className="dot"/>{openBugs.length} open</span></div>
+                <div className="card-header"><h3>Recent bugs</h3><span className={\`pill \${openBugs.length > 0 ? "fail" : ""}\`}><span className="dot"/>{openBugs.length} open</span></div>
                 <div className="card-body plain">
                   {BUGS.slice(0,6).map(b => (
                     <div key={b.id} className="health-row" style={{gridTemplateColumns:"auto 1fr auto"}} onClick={()=>onSelectBug(b)}>
@@ -7910,17 +7395,35 @@ function DashboardView({ onSelectTest, onSelectBug, onNavigate }) {
 }
 
 // ===== Tests Kanban =====
-function TestsView({ onSelectTest, rowMode, setRowMode }) {
-  const { TEST_CASES, CATEGORIES } = window.MORBIUS;
+function TestsView({ onSelectTest, rowMode, setRowMode, focusStory, onNavigate }) {
+  const { TEST_CASES, CATEGORIES, ACTIVE_PROJECT_CONFIG } = window.MORBIUS;
   const [statusFilter, setStatusFilter] = vS("All");
   const [typeFilter, setTypeFilter] = vS("All");
   const [query, setQuery] = vS("");
+  const [scope, setScope] = vS("ready");   // working set: ready | review | all
+  // Cross-nav focus from the QA Plan hub: pin to one story's cards (shown across all epics).
+  const [storyFilter, setStoryFilter] = vS(focusStory || null);
+  aE(() => { if (focusStory) { setStoryFilter(focusStory); setScope("all"); } }, [focusStory]);
 
   const [selId, setSelId] = vS(null);
+
+  // ── Triage Shelf (QA legibility) ───────────────────────────────────────────
+  // A project may declare reviewEpics (category-slug prefixes) for raw / un-curated
+  // imports — e.g. over-shredded PMAgent epics. Those cards are "needs review": kept on
+  // disk but excluded from the default Ready worklist so the curated plans don't drown.
+  // No reviewEpics (every other project) → reviewCount 0 → the toggle + shelf never render
+  // and this view behaves exactly as it did before.
+  const reviewEpics = (ACTIVE_PROJECT_CONFIG && ACTIVE_PROJECT_CONFIG.reviewEpics) || [];
+  const needsReview = t => reviewEpics.some(p => (t.cat || "").startsWith(p));
+  const reviewCount = vM(() => TEST_CASES.filter(needsReview).length, [TEST_CASES, reviewEpics.join("|")]);
+  const hasReview = reviewCount > 0;
+  const effScope = hasReview ? scope : "all";   // nothing to review → show everything
 
   const filtered = TEST_CASES.filter(t =>
     (statusFilter==="All" || t.status===statusFilter) &&
     (typeFilter==="All" || t.type===typeFilter) &&
+    (effScope==="all" || (effScope==="ready" ? !needsReview(t) : needsReview(t))) &&
+    (!storyFilter || t.story === storyFilter) &&
     (!query || (t.title+" "+t.id).toLowerCase().includes(query.toLowerCase()))
   );
 
@@ -7964,7 +7467,7 @@ function TestsView({ onSelectTest, rowMode, setRowMode }) {
   return (
     <React.Fragment>
       <div className="kanban-toolbar">
-        {/* Row 1: status pills */}
+        {/* Row 1: status pills + working-set toggle */}
         <div className="kt-row">
           <div className="row" style={{gap:6}}>
             {statusCounts.map(o => (
@@ -7973,6 +7476,25 @@ function TestsView({ onSelectTest, rowMode, setRowMode }) {
               </button>
             ))}
           </div>
+          {hasReview && (
+            <React.Fragment>
+              <div style={{flex:1}}/>
+              {/* Scope is a different axis than status — bind these chips into a
+                  segmented group so its "All" doesn't read as a duplicate of the
+                  status row's "All". */}
+              <div className="chip-group" title="Working-set scope">
+                {[
+                  {k:"ready",  l:"Ready",        n:TEST_CASES.length - reviewCount},
+                  {k:"review", l:"Needs review", n:reviewCount},
+                  {k:"all",    l:"All",          n:TEST_CASES.length},
+                ].map(o => (
+                  <button key={o.k} className={\`chip \${scope===o.k?"active":""}\`} onClick={()=>setScope(o.k)} title={o.k==="review" ? "Raw / un-curated imports — kept on disk, excluded from the Ready worklist" : ""}>
+                    {o.l} <span className="n">{o.n}</span>
+                  </button>
+                ))}
+              </div>
+            </React.Fragment>
+          )}
         </div>
         {/* Row 2: type filters + search */}
         <div className="kt-row">
@@ -7981,6 +7503,11 @@ function TestsView({ onSelectTest, rowMode, setRowMode }) {
               <button key={t} className={\`chip \${typeFilter===t?"active":""}\`} onClick={()=>setTypeFilter(t)}>{t}</button>
             ))}
           </div>
+          {storyFilter && (
+            <button className="chip active" style={{marginLeft:8}} onClick={()=>setStoryFilter(null)} title="Clear story filter — show all test cases">
+              Story {storyFilter} ✕
+            </button>
+          )}
           <div style={{flex:1}}/>
           <input className="chip kt-search" placeholder="Search…" value={query} onChange={e=>setQuery(e.target.value)}/>
         </div>
@@ -8001,7 +7528,9 @@ function TestsView({ onSelectTest, rowMode, setRowMode }) {
                       <td><StatusPill status={t.status}/></td>
                       <td><span className="pill">{t.priority}</span></td>
                       <td><Avatar initials={t.owner} size={20}/></td>
-                      <td className="id">{t.lastRun}</td>
+                      {/* A "Not run" test with a "3d ago" last-run is a visible contradiction —
+                          lastRun here is import metadata, not an execution timestamp. */}
+                      <td className="id">{t.status === "not-run" ? "—" : t.lastRun}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -8051,13 +7580,25 @@ function TestsView({ onSelectTest, rowMode, setRowMode }) {
                           <span className="qa-plan-dot"><StatusDot status={t.status}/></span>
                           <span className="qa-plan-id">{t.id}</span>
                           <span className="qa-plan-label">{t.title}</span>
+                          {t.blocked && <span title={t.blockedReason} style={{marginLeft:"auto", flexShrink:0, fontSize:11}}>⛔</span>}
                         </div>
                       ))}
                     </React.Fragment>
                   );
                 })}
+                {effScope === "ready" && hasReview && (
+                  <div
+                    className="qa-section-label"
+                    onClick={()=>setScope("review")}
+                    style={{cursor:"pointer", marginTop:8, borderTop:"1px dashed var(--border)", paddingTop:10, color:"var(--warn)"}}
+                    title="Raw / un-curated imports — click to review"
+                  >
+                    <span>⚠ Needs review — raw import</span>
+                    <span style={{color:"var(--fg-faint)", fontWeight:400, marginLeft:4}}>({reviewCount}) ›</span>
+                  </div>
+                )}
               </div>
-              <TestPlanDetail test={selectedTest} onOpenFull={onSelectTest}/>
+              <TestPlanDetail test={selectedTest} onOpenFull={onSelectTest} onNavigate={onNavigate}/>
             </div>
           );
         })()
@@ -8284,7 +7825,23 @@ function AutomationPlanView() {
 // ===== Test plan detail (right panel of the QA split-view) =====
 // Mirrors PMAgent's QAPlanDetail: meta header + full markdown document, with
 // Morbius's execution signal (status, Maestro flow, run history) appended.
-function TestPlanDetail({ test, onOpenFull }) {
+// Curated PMAgent test plans get pasted into the card body TWICE — once under "## Steps"
+// and again under "## Expected Result" (the 2nd copy often truncated mid-word). When the
+// "# Test Plan:" marker appears more than once, keep only the first block and drop the
+// dangling "## Expected Result" heading that introduced the dup. No marker / single copy →
+// returned unchanged (safe no-op for shredded or non-plan bodies).
+function dedupeTestPlanBody(md) {
+  if (!md || typeof md !== "string") return md;
+  const marker = "# Test Plan:";
+  const first = md.indexOf(marker);
+  if (first < 0) return md;
+  const second = md.indexOf(marker, first + marker.length);
+  if (second < 0) return md;
+  const head = md.slice(0, second).replace(/\\n#{1,6}[ \\t]*Expected Result[ \\t]*\\n+\\s*$/i, "\\n");
+  return head.replace(/\\s+$/, "");
+}
+
+function TestPlanDetail({ test, onOpenFull, onNavigate }) {
   const { CATEGORIES } = window.MORBIUS;
   const [detail, setDetail] = useState(null);
   const [runs, setRuns] = useState(null);
@@ -8331,7 +7888,28 @@ function TestPlanDetail({ test, onOpenFull }) {
     || (detail && Array.isArray(detail.tags) ? (detail.tags.find(t => /^s-/i.test(t)) || '').toUpperCase() : '')
     || '—';
   const platforms = detail && Array.isArray(detail.platforms) && detail.platforms.length ? detail.platforms.join(', ') : '—';
-  const bodyHtml = detail && detail.markdownBody ? mdToHtml(detail.markdownBody) : '';
+  const bodyHtml = detail && detail.markdownBody ? mdToHtml(dedupeTestPlanBody(detail.markdownBody)) : '';
+  // Round-trip: which QA plans cover this card's story → jump back to the QA Plan view.
+  const coveringPlans = (() => {
+    const items = (window.MORBIUS && window.MORBIUS.PLANS && window.MORBIUS.PLANS.items) || [];
+    if (!storyId || storyId === '—') return [];
+    const sid = String(storyId).toUpperCase();
+    return items.filter(p => p.type !== 'release-def' && (p.storyIds || []).includes(sid));
+  })();
+
+  // Phase 3: source-drift display (computed server-side in /api/test/:id).
+  const driftInfo = (() => {
+    const d = detail && detail.drift;
+    if (!d || d === 'none') return null;
+    const map = {
+      'in-sync':        { label:'In sync',        klass:'ok',      banner:null },
+      'drifted':        { label:'Drifted',        klass:'warn',    banner:{ color:'warn', text:'Source drifted — the PMAgent AC / test-plan changed since this card was imported. Re-pull from PMAgent to update.' } },
+      'source-missing': { label:'Source missing', klass:'fail',    banner:{ color:'fail', text:'Source missing — the PMAgent source file for this card was moved or deleted.' } },
+      'pinned':         { label:'Pinned',         klass:'neutral', banner:null },
+    };
+    return map[d] || { label:d, klass:'neutral', banner:null };
+  })();
+  const srcBase = detail && detail.pmagentSource && detail.pmagentSource.sourcePath ? detail.pmagentSource.sourcePath.split('/').pop() : '';
 
   return (
     <div className="qa-detail" data-testid="qa-right-panel">
@@ -8340,16 +7918,42 @@ function TestPlanDetail({ test, onOpenFull }) {
         <StatusPill status={test.status}/>
         <h2 style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{test.title}</h2>
         <RunButtons test={test} onRunFinished={() => setRuns(null)}/>
+        <FileBugButton test={test}/>
         {onOpenFull && <button className="btn ghost sm" onClick={() => onOpenFull(test)} title="Open full detail drawer">Full</button>}
       </div>
       <div className="qa-detail-body">
+        {test.blocked && (
+          <div style={{margin:"0 0 14px", padding:"9px 12px", borderRadius:6, background:"rgba(245,166,35,0.10)", border:"1px solid var(--warn)", color:"var(--warn)", fontSize:12, display:"flex", gap:8, alignItems:"flex-start"}}>
+            <span>⛔</span><span><strong>Blocked</strong> — {test.blockedReason || "see Automation Plan"}</span>
+          </div>
+        )}
+        {driftInfo && driftInfo.banner && (
+          <div style={{margin:"0 0 14px", padding:"9px 12px", borderRadius:6, background:"var(--bg-elev)", border:"1px solid var(--" + driftInfo.banner.color + ")", color:"var(--" + driftInfo.banner.color + ")", fontSize:12, display:"flex", gap:8, alignItems:"flex-start"}}>
+            <span>⚠</span><span>{driftInfo.banner.text}</span>
+          </div>
+        )}
         <div className="qa-meta-grid">
           <div className="qa-meta"><span className="k">Story</span><span className="mono">{storyId}</span></div>
           <div className="qa-meta"><span className="k">Epic</span><span>{catName}</span></div>
           <div className="qa-meta"><span className="k">Scenario</span><span>{test.type}</span></div>
           <div className="qa-meta"><span className="k">Priority</span><span>{test.priority}</span></div>
           <div className="qa-meta"><span className="k">Platforms</span><span>{platforms}</span></div>
+          {driftInfo && (
+            <div className="qa-meta">
+              <span className="k">Sync</span>
+              <span title={srcBase ? ('Source: ' + srcBase) : ''}><span className={\`pill sq \${driftInfo.klass}\`} style={{fontSize:10}}>{driftInfo.label}</span></span>
+            </div>
+          )}
         </div>
+
+        {coveringPlans.length > 0 && onNavigate && (
+          <div style={{margin:"12px 0 4px", display:"flex", alignItems:"center", gap:6, flexWrap:"wrap"}}>
+            <span style={{fontSize:10.5, color:"var(--fg-faint)", textTransform:"uppercase", letterSpacing:.5, fontWeight:600, marginRight:2}}>In QA plans</span>
+            {coveringPlans.map(p => (
+              <button key={p.id} className="chip" onClick={()=>onNavigate("plans", { plan: p.id })} title={p.title}>{p.id}</button>
+            ))}
+          </div>
+        )}
 
         {detail === null ? (
           <div style={{fontSize:12, color:"var(--fg-faint)", padding:"12px 0"}}>Loading…</div>
@@ -8409,6 +8013,12 @@ function BugsView({ onSelectBug }) {
               <div className="title"><StatusDot status={col.dot==="none"?"none":col.dot}/> {col.label} <span className="pill" style={{fontSize:10, padding:"0 5px"}}>{items.length}</span></div>
             </div>
             <div className="kanban-col-body">
+              {items.length === 0 && (
+                <div className="empty-state">
+                  <span>No {col.label.toLowerCase()} bugs</span>
+                  {col.key === "open" && <span className="es-hint">File one with Report bug, or from a failing run</span>}
+                </div>
+              )}
               {items.map(b => (
                 <div key={b.id} className="tc-card" onClick={()=>onSelectBug(b)}>
                   <div className="head">
@@ -8631,7 +8241,7 @@ function DevicesView() {
                 <tr key={t.id + '__' + i}>
                   <td><span className="mono" style={{fontSize:11, color:"var(--fg-muted)"}}>{t.id}</span> &nbsp; {t.title}</td>
                   {configDevices.map(d => (
-                    <td key={d.id}><span className={\`cell-dot \${t.devices[d.id]==="not-run"?"none":t.devices[d.id]}\`} title={t.devices[d.id]}/></td>
+                    <td key={d.id}><span className={\`cell-dot \${!t.devices[d.id] || t.devices[d.id]==="not-run" ? "none" : t.devices[d.id]}\`} title={t.devices[d.id] || "not run"}/></td>
                   ))}
                 </tr>
               ))}
@@ -8802,8 +8412,9 @@ function RunsView() {
         </div>
         <div className="card-body" style={{padding:'8px 12px'}}>
           {!loading && runs.length === 0 && (
-            <div style={{padding:'30px 14px', textAlign:'center', color:'var(--fg-faint)', fontSize:12}}>
-              No runs match the current filters. Run a test from the Maestro tab or the Test Drawer to populate this stream.
+            <div className="empty-state" style={{margin:'8px 2px'}}>
+              <span>No runs match the current filters</span>
+              <span className="es-hint">Run a test from the Maestro tab or the Test Drawer to populate this stream</span>
             </div>
           )}
           {groups.map(group => (
@@ -8876,10 +8487,11 @@ function RunsView() {
 }
 
 // ===== Maestro =====
-function MaestroView() {
+function MaestroView({ focusFlow }) {
   const { MAESTRO_FLOWS, SAMPLE_YAML } = window.MORBIUS;
   const [platform, setPlatform] = vS("android");
   const [selected, setSelected] = vS(MAESTRO_FLOWS[0] || null);
+  aE(() => { if (focusFlow) { const f = (MAESTRO_FLOWS || []).find(x => x.id === focusFlow); if (f) setSelected(f); } }, [focusFlow]);
   // Run state: { [flowId]: { status:'running'|'pass'|'fail', logs:'', runId } }
   const [runState, setRunState] = vS({});
 
@@ -10903,6 +10515,46 @@ function ChangelogAccordion({ entries, fmtTime }) {
   );
 }
 
+// Phase 2: one-tap bug capture — creates a BUG pre-linked to this test, ready to enrich in the
+// Bugs view. Device defaults to the project's first configured device; a blocked card seeds the
+// failure reason from its blocker.
+function FileBugButton({ test }) {
+  const [busy, setBusy] = aS(false);
+  const [done, setDone] = aS(null);   // {id} on success | {err} on failure
+  const cfg = window.MORBIUS?.ACTIVE_PROJECT_CONFIG || {};
+  const fileBug = async () => {
+    setBusy(true); setDone(null);
+    try {
+      const r = await fetch('/api/bugs/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: '[' + test.id + '] ' + (test.title || 'Bug'),
+          priority: test.priority || 'P2',
+          category: test.cat || 'unknown',
+          linkedTest: test.id,
+          device: (cfg.devices && cfg.devices[0] && cfg.devices[0].id) || 'unknown',
+          failureReason: test.blocked ? test.blockedReason : '',
+        }),
+      });
+      const j = await r.json();
+      if (j.ok && j.bug) setDone({ id: j.bug.id });
+      else setDone({ err: j.error || ('HTTP ' + r.status) });
+    } catch (e) { setDone({ err: String(e) }); }
+    setBusy(false);
+  };
+  if (done && done.id) {
+    return <span className="pill sq ok" style={{fontSize:10.5}} title="Created — open the Bugs tab to triage">🐛 {done.id} ✓</span>;
+  }
+  return (
+    <React.Fragment>
+      <button className="btn ghost sm" onClick={fileBug} disabled={busy} title="Create a bug linked to this test case">
+        <Icon.bug/> {busy ? 'Filing…' : 'Bug'}
+      </button>
+      {done && done.err && <span className="pill sq fail" style={{fontSize:10.5}}>✗ {done.err}</span>}
+    </React.Fragment>
+  );
+}
+
 // E-024 / S-024-004 + S-024-005: Run buttons gated by project type.
 // - mobile → existing Android/iOS buttons (legacy behavior; placeholder until wired)
 // - web    → "Run headless" + "Run visual" via /api/test/run-web
@@ -10930,13 +10582,51 @@ function RunButtons({ test, onRunFinished }) {
     setBusy(null);
   };
 
+  // mobile — fire a Maestro run on the chosen platform, then watch the run stream for the
+  // 'done' event (mirrors the Maestro view). Graceful pill on the no-flow / CLI-missing 400.
+  const runMobile = async (platform) => {
+    setBusy(platform); setLastResult(null);
+    try {
+      const r = await fetch('/api/test/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testId: test.id, platform }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.runId) {
+        setLastResult({ ok: false, msg: '✗ ' + (j.error || ('HTTP ' + r.status)) });
+        setBusy(null);
+        return;
+      }
+      const port = location.port || '3000';
+      const ws = new WebSocket('ws://' + location.hostname + ':' + port + '/ws/run-stream');
+      let done = false;
+      ws.onopen = () => ws.send(JSON.stringify({ type: 'subscribe', runId: j.runId }));
+      ws.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        if (d.type === 'done') {
+          done = true;
+          setLastResult({ ok: d.status === 'pass',
+            msg: (d.status === 'pass' ? '✓ pass' : '✗ ' + (d.friendlyError || d.failingStep || 'fail')) + (d.device ? ' · ' + d.device : '') });
+          setBusy(null);
+          if (onRunFinished) onRunFinished();
+          ws.close();
+        }
+      };
+      ws.onerror = () => { if (!done) { setLastResult({ ok: false, msg: '✗ stream error — check Runs tab' }); setBusy(null); } };
+      ws.onclose = () => { if (!done) { setBusy(null); if (onRunFinished) onRunFinished(); } };
+    } catch (e) {
+      setLastResult({ ok: false, msg: '✗ ' + String(e) });
+      setBusy(null);
+    }
+  };
+
   if (projectType === 'web') {
     if (!cfg.webUrl) {
       return <span className="pill sq" style={{fontSize:10.5, color:'var(--warn)'}} title="Set webUrl in Settings → Workspace">no webUrl</span>;
     }
     return (
       <React.Fragment>
-        <button className={\`btn sm \${busy === 'headless' ? 'ghost' : 'primary'}\`} onClick={() => runWeb('headless')} disabled={!!busy}
+        <button className={\`btn sm \${busy === 'headless' ? 'ghost' : ''}\`} onClick={() => runWeb('headless')} disabled={!!busy}
           title={'Run headless via Claude + Playwright MCP against ' + cfg.webUrl}>
           <Icon.play/> {busy === 'headless' ? 'Running…' : 'Run headless'}
         </button>
@@ -10953,8 +10643,25 @@ function RunButtons({ test, onRunFinished }) {
   if (projectType === 'api') {
     return <button className="btn sm" disabled title="API runner not implemented in v1"><Icon.play/> Run (api: TBD)</button>;
   }
-  // mobile (legacy)
-  return <button className="btn sm" title="Maestro run (legacy — wire to /api/test/run)"><Icon.play/> Run</button>;
+  // mobile — per-platform Maestro run against the project's configured device platforms.
+  const mobPlatforms = [...new Set((cfg.devices || []).map(d => d.platform || 'android'))];
+  const runPlats = ['ios','android'].filter(p => mobPlatforms.includes(p));
+  const platLabel = { ios: 'iOS', android: 'Android' };
+  return (
+    <React.Fragment>
+      {/* Two side-by-side accent-filled buttons read as competing primaries —
+          per-platform runs are peer actions; the suite-level CTA lives in the topbar. */}
+      {(runPlats.length ? runPlats : ['android']).map(p => (
+        <button key={p} className={\`btn sm \${busy === p ? 'ghost' : ''}\`} onClick={() => runMobile(p)} disabled={!!busy}
+          title={'Run the linked Maestro flow on ' + (platLabel[p] || p)}>
+          <Icon.play/> {busy === p ? 'Running…' : ('Run ' + (platLabel[p] || p))}
+        </button>
+      ))}
+      {lastResult && (
+        <span className={\`pill sq \${lastResult.ok ? 'ok' : 'fail'}\`} style={{fontSize:10.5}}>{lastResult.msg}</span>
+      )}
+    </React.Fragment>
+  );
 }
 
 function TestDrawer({ test, onClose, onSelectBug, setView }) {
@@ -11008,13 +10715,16 @@ function TestDrawer({ test, onClose, onSelectBug, setView }) {
       <div className="drawer-backdrop" onClick={onClose}/>
       <aside className="drawer">
         <div className="drawer-head">
+          {/* Row 1: id + status + actions. The title gets its own full-width row below
+              (CSS order:10 + 2-line clamp) — squeezed between buttons it truncated to "S…". */}
           <span className="dr-id">{test.id}</span>
           <StatusPill status={test.status}/>
-          <h2 style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{test.title}</h2>
+          <span style={{flex:1}}/>
           {/* E-024 / S-024-004 + S-024-005: project-type-aware Run buttons */}
           <RunButtons test={test} onRunFinished={() => setRuns(null)}/>
-          <button className="btn ghost sm"><Icon.bug/></button>
-          <button className="icon-btn" onClick={onClose}><Icon.close/></button>
+          <FileBugButton test={test}/>
+          <button className="icon-btn" onClick={onClose} title="Close" aria-label="Close"><Icon.close/></button>
+          <h2>{test.title}</h2>
         </div>
         <div className="drawer-body">
           <section>
@@ -11022,7 +10732,7 @@ function TestDrawer({ test, onClose, onSelectBug, setView }) {
             <div className="pair"><span className="k">Type</span><span>{test.type}</span></div>
             <div className="pair"><span className="k">Priority</span><span>{test.priority}</span></div>
             <div className="pair"><span className="k">Owner</span><span className="row" style={{gap:6}}><Avatar initials={test.owner} size={18}/> {test.owner}</span></div>
-            <div className="pair"><span className="k">Last run</span><span className="mono">{test.lastRun}</span></div>
+            <div className="pair"><span className="k">Last run</span><span className="mono">{test.status === "not-run" ? "—" : test.lastRun}</span></div>
             <div className="pair"><span className="k">YAML</span><span>{test.yaml ? <span className="pill sq accent"><span className="dot"/>linked</span> : <span className="pill">unlinked</span>}</span></div>
           </section>
 
@@ -11031,19 +10741,30 @@ function TestDrawer({ test, onClose, onSelectBug, setView }) {
               source from /api/test/:id (the detail state) which has the full markdown. */}
           <section>
             <div className="sec-title">Steps</div>
+            {/* Render as markdown through the same pipeline as the board's right panel —
+                these fields ARE markdown (curated PMAgent plans), and raw "**ID:**" text
+                in the drawer was the loudest unpolished surface in the app. Imports often
+                stuff the same plan into both steps and acceptanceCriteria; suppress the
+                AC copy when it's just the steps doc again. */}
             {detail === null ? (
               <div style={{fontSize:12, color:"var(--fg-faint)"}}>Loading…</div>
             ) : detail.steps ? (
-              <div style={{margin:0, fontSize:12.5, color:"var(--fg-muted)", lineHeight:1.7, whiteSpace:'pre-wrap'}}>{detail.steps}</div>
+              <div className="md-doc" style={{fontSize:12.5}} dangerouslySetInnerHTML={{__html: mdToHtml(dedupeTestPlanBody(detail.steps))}}/>
             ) : (
               <div style={{fontSize:12, color:"var(--fg-faint)"}}>No steps recorded.</div>
             )}
-            {detail?.acceptanceCriteria && (
-              <div style={{marginTop:10}}>
-                <div style={{fontSize:11, color:"var(--fg-faint)", textTransform:'uppercase', letterSpacing:0.5, marginBottom:4}}>Acceptance criteria</div>
-                <div style={{fontSize:12.5, color:"var(--fg-muted)", lineHeight:1.7, whiteSpace:'pre-wrap'}}>{detail.acceptanceCriteria}</div>
-              </div>
-            )}
+            {(() => {
+              const ac = detail?.acceptanceCriteria;
+              if (!ac) return null;
+              const norm = s => String(s).replace(/\\s+/g, ' ').trim().slice(0, 120);
+              if (detail.steps && norm(ac) === norm(detail.steps)) return null;
+              return (
+                <div style={{marginTop:10}}>
+                  <div style={{fontSize:11, color:"var(--fg-faint)", textTransform:'uppercase', letterSpacing:0.5, marginBottom:4}}>Acceptance criteria</div>
+                  <div className="md-doc" style={{fontSize:12.5}} dangerouslySetInnerHTML={{__html: mdToHtml(dedupeTestPlanBody(ac))}}/>
+                </div>
+              );
+            })()}
           </section>
 
           {/* S-015-002: Maestro flow — rendered human-readable steps via stepsToHtml (server-side parsed) */}
@@ -11324,9 +11045,10 @@ function BugDrawer({ bug, onClose, onSelectTest }) {
           <span className="dr-id">{bug.id}</span>
           {bug.jira && <span className="pill sq accent"><span className="dot"/>Jira · {bug.jira}</span>}
           <span className={\`pill sq \${bug.priority==="P1"?"fail":bug.priority==="P2"?"warn":""}\`}>{bug.priority}</span>
-          <h2 style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{bug.title}</h2>
           <StatusPill status={bug.status}/>
-          <button className="icon-btn" onClick={onClose}><Icon.close/></button>
+          <span style={{flex:1}}/>
+          <button className="icon-btn" onClick={onClose} title="Close" aria-label="Close"><Icon.close/></button>
+          <h2>{bug.title}</h2>
         </div>
         <div className="drawer-body">
           <section>
@@ -11717,7 +11439,7 @@ function NewProjectModal({ onClose, onCreated }) {
 }
 
 function Sidebar({ view, setView, onProjectSwitch }) {
-  const { TEST_CASES, BUGS, MAESTRO_FLOWS, PROJECTS, ACTIVE_PROJECT, ACTIVE_PROJECT_CONFIG } = window.MORBIUS;
+  const { TEST_CASES, BUGS, MAESTRO_FLOWS, PROJECTS, ACTIVE_PROJECT, ACTIVE_PROJECT_CONFIG, PLANS } = window.MORBIUS;
   const [showProjects, setShowProjects] = aS(false);
   const { health } = useHealth();
 
@@ -11749,6 +11471,7 @@ function Sidebar({ view, setView, onProjectSwitch }) {
   const allItems = [
     { k:"dashboard", l:"Dashboard", ic:Icon.dashboard, n:null, kb:"1", showFor: 'all' },
     { k:"tests", l:"Test Cases", ic:Icon.tests, n:TEST_CASES.length, kb:"2", showFor: 'all' },
+    { k:"plans", l:"QA Plan", ic:Icon.tag, n:(PLANS && PLANS.items ? (PLANS.items.filter(p=>p.type!=='release-def').length || null) : null), kb:null, showFor: 'all' },  // E-029 orientation layer (QA/Flow/Release plans from PMAgent)
     { k:"bugs", l:"Bugs", ic:Icon.bug, n:openBugs || null, kb:"3", showFor: 'all' },
     { k:"devices", l:"Devices", ic:Icon.devices, n:devices, kb:"4", showFor: 'mobile' },
     { k:"runs", l:"Runs", ic:Icon.runs, n:null, kb:"5", showFor: 'all' },
@@ -12021,7 +11744,11 @@ function Topbar({ view, theme, setTheme, onChat, onSearch, layout, onSync, onRun
             </button>
           );
         })()}
-        <button className="btn primary sm" onClick={onChat}><Icon.chat/> Morbius</button>
+        {/* AI assistant entry — accent-tinted but quiet. A filled accent button in the
+            corner outcompetes Run suite, and the brand mark already owns the violet. */}
+        <button className="btn sm" onClick={onChat} style={{color:"var(--accent)", borderColor:"oklch(from var(--accent) l c h / 0.35)"}}>
+          <Icon.chat/> Morbius
+        </button>
       </div>
     </header>
   );
@@ -12773,13 +12500,477 @@ function HealingQueueView() {
 }
 
 // ===== App =====
+// ===== E-029: QA Plan view — the orientation layer (QA / Flow / Release plans from PMAgent) =====
+// Mirrors PMAgent's QA tab in Morbius's own design: master/detail, native badges + meta strip,
+// markdown body rendered through Morbius's themed .md-doc. Reuses qa-master / qa-meta-grid / mdToHtml.
+
+// D2 — render a User Flow's mermaid screen-flow graph inline (reuses the global mermaid the App Map uses).
+// Zoom/pan viewport: wheel-to-zoom (toward cursor), drag-to-pan, and +/−/fit controls,
+// styled to the Morbius monochrome system. The diagram lives in a fixed-height framed
+// viewport instead of an unbounded scroll box, so big screen-flows stay legible.
+let __mmdSeq = 0;
+const MMD_MIN = 0.3, MMD_MAX = 4;
+const mmdClamp = (s) => Math.min(MMD_MAX, Math.max(MMD_MIN, s));
+function MermaidBlock({ code }) {
+  const wrapRef = React.useRef(null);
+  const hostRef = React.useRef(null);
+  const dragRef = React.useRef(null);
+  const sizeRef = React.useRef({ w: 0, h: 0 });
+  const [view, setView] = aS({ scale: 1, x: 0, y: 0 });
+  const [dragging, setDragging] = aS(false);
+  const [err, setErr] = aS(false);
+
+  // Center the diagram in the viewport at a scale that fits (never upscales past 1x).
+  const fitView = React.useCallback(() => {
+    const wrap = wrapRef.current; const { w, h } = sizeRef.current;
+    if (!wrap || !w || !h) { setView({ scale: 1, x: 0, y: 0 }); return; }
+    const cw = wrap.clientWidth, ch = wrap.clientHeight;
+    const scale = mmdClamp(Math.min(1, Math.min(cw / w, ch / h) * 0.96));
+    setView({ scale, x: (cw - w * scale) / 2, y: (ch - h * scale) / 2 });
+  }, []);
+
+  // Render the mermaid source → SVG, normalize it to its intrinsic px size, then fit.
+  aE(() => {
+    let cancelled = false;
+    const host = hostRef.current;
+    if (!code || !host) return;
+    setErr(false);
+    if (!window.mermaid) { host.textContent = code; return; }
+    const id = "mmd-" + (++__mmdSeq);
+    Promise.resolve(window.mermaid.render(id, code))
+      .then(out => {
+        if (cancelled || !host) return;
+        host.innerHTML = (out && out.svg) || "";
+        const svg = host.querySelector("svg");
+        if (svg) {
+          const vb = svg.viewBox && svg.viewBox.baseVal;
+          let w = vb && vb.width ? vb.width : 0, h = vb && vb.height ? vb.height : 0;
+          if ((!w || !h) && svg.getBBox) { try { const b = svg.getBBox(); w = w || b.width; h = h || b.height; } catch (e) {} }
+          sizeRef.current = { w: w || 640, h: h || 360 };
+          svg.removeAttribute("style");
+          svg.setAttribute("width", sizeRef.current.w);
+          svg.setAttribute("height", sizeRef.current.h);
+          svg.style.display = "block";
+        }
+        fitView();
+      })
+      .catch(() => { if (!cancelled) { setErr(true); if (host) host.innerHTML = ""; } });
+    return () => { cancelled = true; };
+  }, [code, fitView]);
+
+  // Wheel-to-zoom toward the cursor. Native non-passive listener so preventDefault works
+  // (React's synthetic wheel handler is passive and can't stop the page from scrolling).
+  aE(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const onWheel = (e) => {
+      e.preventDefault();
+      const rect = wrap.getBoundingClientRect();
+      const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setView(v => {
+        const ns = mmdClamp(v.scale * factor);
+        const k = ns / v.scale;
+        return { scale: ns, x: cx - k * (cx - v.x), y: cy - k * (cy - v.y) };
+      });
+    };
+    wrap.addEventListener("wheel", onWheel, { passive: false });
+    return () => wrap.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const onPointerDown = (e) => {
+    if (e.button !== 0) return;
+    dragRef.current = { sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y };
+    setDragging(true);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (er) {}
+  };
+  const onPointerMove = (e) => {
+    const d = dragRef.current; if (!d) return;
+    setView(v => ({ ...v, x: d.ox + (e.clientX - d.sx), y: d.oy + (e.clientY - d.sy) }));
+  };
+  const endDrag = () => { dragRef.current = null; setDragging(false); };
+  const zoomBy = (f) => setView(v => {
+    const wrap = wrapRef.current; const cw = wrap ? wrap.clientWidth / 2 : 0, ch = wrap ? wrap.clientHeight / 2 : 0;
+    const ns = mmdClamp(v.scale * f); const k = ns / v.scale;
+    return { scale: ns, x: cw - k * (cw - v.x), y: ch - k * (ch - v.y) };
+  });
+
+  if (!code) return null;
+  if (err) return <div style={{fontSize:12, color:"var(--fg-faint)", padding:"8px 0"}}>Screen-flow diagram could not render.</div>;
+
+  const ctrlBtn = { width:26, height:26, display:"flex", alignItems:"center", justifyContent:"center", background:"var(--bg-elev)", color:"var(--fg-muted)", border:"1px solid var(--border)", borderRadius:5, cursor:"pointer", fontSize:14, lineHeight:1, fontFamily:"var(--font-mono)", userSelect:"none" };
+  return (
+    <div style={{position:"relative", height:380, border:"1px solid var(--border)", borderRadius:8, background:"var(--bg-app)", overflow:"hidden", margin:"6px 0"}}>
+      <div ref={wrapRef}
+        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endDrag} onPointerLeave={endDrag}
+        onDoubleClick={fitView}
+        style={{position:"absolute", inset:0, cursor: dragging ? "grabbing" : "grab", touchAction:"none"}}>
+        <div ref={hostRef} style={{position:"absolute", left:0, top:0, transformOrigin:"0 0", transform:\`translate(\${view.x}px, \${view.y}px) scale(\${view.scale})\`}}/>
+      </div>
+      <div style={{position:"absolute", top:8, right:8, display:"flex", alignItems:"center", gap:4}}>
+        <span style={{minWidth:38, textAlign:"center", fontSize:10, color:"var(--fg-faint)", fontFamily:"var(--font-mono)"}}>{Math.round(view.scale * 100)}%</span>
+        <div title="Zoom out" onClick={()=>zoomBy(1/1.2)} style={ctrlBtn}>−</div>
+        <div title="Zoom in" onClick={()=>zoomBy(1.2)} style={ctrlBtn}>+</div>
+        <div title="Fit to view" onClick={fitView} style={{...ctrlBtn, fontSize:12}}>⤢</div>
+      </div>
+      <div style={{position:"absolute", bottom:6, left:10, fontSize:9.5, color:"var(--fg-faint)", pointerEvents:"none", fontFamily:"var(--font-mono)"}}>scroll to zoom · drag to pan · double-click to fit</div>
+    </div>
+  );
+}
+
+// Phase C — execution overlay: roll up Morbius run status for the stories a plan covers.
+// This is the truth PMAgent's QA tab can't show ("plan exists" vs "does it pass").
+function planExecRollup(storyIds) {
+  const tc = (window.MORBIUS && window.MORBIUS.TEST_CASES) || [];
+  const set = new Set((storyIds || []).map(s => String(s).toUpperCase()));
+  const r = { total: 0, pass: 0, fail: 0, flaky: 0, notRun: 0 };
+  for (const t of tc) {
+    if (!t.story || !set.has(t.story)) continue;
+    r.total++;
+    if (t.status === 'pass') r.pass++;
+    else if (t.status === 'fail') r.fail++;
+    else if (t.status === 'flaky') r.flaky++;
+    else r.notRun++;
+  }
+  return r;
+}
+function ExecBar({ roll, compact }) {
+  if (!roll || !roll.total) return null;
+  const seg = (n, c) => n > 0 ? <span style={{flex: n, background: c}}/> : null;
+  return (
+    <span style={{display:'inline-flex', alignItems:'center', gap:6, flexShrink:0}}>
+      <span style={{display:'inline-flex', width: compact ? 48 : 120, height: 6, borderRadius: 3, overflow:'hidden', background:'var(--bg-app)'}}>
+        {seg(roll.pass, 'var(--ok)')}{seg(roll.flaky, 'var(--warn)')}{seg(roll.fail, 'var(--fail)')}{seg(roll.notRun, 'var(--border)')}
+      </span>
+      <span style={{fontSize:10, color: roll.pass === roll.total ? 'var(--ok)' : 'var(--fg-faint)', fontFamily:'var(--font-mono)'}}>{roll.pass}/{roll.total}</span>
+    </span>
+  );
+}
+
+// Collapsible card rendering ONE parsed plan section (markdown → themed .md-doc), lazy-rendered.
+// This is the fix for the "too limited" detail: decision-critical sections (Scope, Journeys,
+// Execution order, ITCs, Screens) become scannable cards instead of one collapsed 20k wall.
+function SectionCard({ heading, content, defaultOpen }) {
+  const [open, setOpen] = aS(!!defaultOpen);
+  return (
+    <div style={{border:"1px solid var(--border)", borderRadius:6, marginBottom:8, overflow:"hidden"}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{cursor:"pointer", padding:"8px 12px", display:"flex", alignItems:"center", gap:8, background:"var(--bg-elev)"}}>
+        <span style={{color:"var(--fg-faint)", fontSize:10, width:8, flexShrink:0}}>{open ? "▾" : "▸"}</span>
+        <span style={{fontSize:12, fontWeight:600, flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{heading}</span>
+      </div>
+      {open && (content
+        ? <div className="md-doc" style={{padding:"4px 14px 12px"}} dangerouslySetInnerHTML={{__html: mdToHtml(content)}}/>
+        : <div style={{padding:"8px 14px", fontSize:12, color:"var(--fg-faint)"}}>(no detail)</div>)}
+    </div>
+  );
+}
+
+function PlanDetail({ detail, items, onSelectPlan, onNavigate }) {
+  const [showDoc, setShowDoc] = aS(false);
+  if (!detail) {
+    return <div className="qa-detail qa-detail-empty"><div style={{color:"var(--fg-faint)", fontSize:13}}>Select a plan to view it.</div></div>;
+  }
+  if (detail.error) {
+    return <div className="qa-detail qa-detail-empty"><div style={{color:"var(--fg-faint)", fontSize:13}}>Couldn't load this plan.</div></div>;
+  }
+  const f = detail.fields || {};
+  const TYPE = { qa:"QA PLAN", flow:"FLOW PLAN", release:"RELEASE PLAN", "release-def":"RELEASE", userflow:"USER FLOW" };
+  const metaKeys = ["Version","Stage","Status","Flow","Release","Type","Style","Owner","Updated"];
+  const metas = metaKeys.filter(k => f[k]);
+  const bodyHtml = detail.body ? mdToHtml(detail.body) : "";
+  const clean = v => (v||"").replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, "$1");
+  const allItems = items || [];
+
+  // Parsed plan sections → scannable cards (the "too limited" fix). Per type: which headings open
+  // by default (the decision layer) and which to keep out of the cards (raw-doc-only long tail).
+  const sectionList = detail.sections || [];
+  const SECTION_CFG = {
+    flow:          { open: ["scope"],                                              hide: ["maestro implementation", "run log", "change log", "how to read"] },
+    qa:            { open: ["suite index", "execution order", "backend dependencies"], hide: ["authoring conventions", "maintaining", "change log"] },
+    release:       { open: ["release goal"],                                        hide: ["change log"] },
+    userflow:      { open: ["overview", "entry point"],                            hide: ["stories covered"] },
+    "release-def": { open: ["overview", "theme", "phases", "goal", "what", "stop-line", "scope"], hide: ["change log", "open questions"] },
+  };
+  const secCfg = SECTION_CFG[detail.type] || { open: [], hide: [] };
+  const lcH = s => (s || "").toLowerCase();
+  const planSections = sectionList.filter(s => !secCfg.hide.some(h => lcH(s.heading).includes(h)));
+  const sectionOpen = h => secCfg.open.some(o => lcH(h).includes(o));
+  const sectionGroupTitle = { flow: "Scope & journeys", qa: "Suite operating manual", release: "Validation journeys & details", userflow: "Screens", "release-def": "Release scope & phases" }[detail.type] || "Plan content";
+
+  // Connections: this plan's stories → Morbius test cases (the live board).
+  const tc = (window.MORBIUS && window.MORBIUS.TEST_CASES) || [];
+  const storyIds = detail.storyIds || [];
+  const planCards = tc.filter(c => c.story && storyIds.includes(c.story));
+  const roll = planExecRollup(storyIds);
+  const automatedCount = planCards.filter(c => c.automated).length;
+  const stories = storyIds.slice().sort().map(sid => {
+    const cs = planCards.filter(c => c.story === sid);
+    let st = "none";
+    if (cs.length) {
+      if (cs.every(c => c.status === "pass")) st = "pass";
+      else if (cs.some(c => c.status === "fail")) st = "fail";
+      else if (cs.some(c => c.status === "flaky")) st = "flaky";
+      else st = "not-run";
+    }
+    const blk = cs.find(c => c.blocked);
+    return { sid, count: cs.length, st, blocked: !!blk, blockedReason: blk ? blk.blockedReason : "", title: cs[0] ? cs[0].title.replace(/\\s*—\\s*Test Plan\\s*$/i, "") : "" };
+  });
+  const blockedStoryCount = stories.filter(s => s.blocked).length;
+
+  // Plan → plan cross-links.
+  let crossTitle = null, crossPlans = [];
+  if (detail.type === "qa") { crossTitle = "Flow plans in this suite"; crossPlans = allItems.filter(i => i.type === "flow"); }
+  else if (detail.type === "release") { crossTitle = "Covered by flow plans"; crossPlans = allItems.filter(i => i.type === "flow" && (i.storyIds||[]).some(s => storyIds.includes(s))); }
+  else if (detail.type === "flow") { crossTitle = "In release plans"; crossPlans = allItems.filter(i => i.type === "release" && (i.storyIds||[]).some(s => storyIds.includes(s))); }
+  else if (detail.type === "userflow") { crossTitle = "Flow plan"; crossPlans = allItems.filter(i => i.type === "flow" && i.ufId === detail.id); }
+  // A Flow Plan's linked User Flow (the screen map / journey).
+  const linkedUf = (detail.type === "flow" && detail.ufId) ? allItems.find(i => i.type === "userflow" && i.id === detail.ufId) : null;
+
+  const Section = ({ title, children }) => (
+    <div style={{margin:"0 0 16px"}}>
+      {title && <div style={{fontSize:10.5, color:"var(--fg-faint)", textTransform:"uppercase", letterSpacing:.5, fontWeight:600, marginBottom:8}}>{title}</div>}
+      {children}
+    </div>
+  );
+
+  return (
+    <div className="qa-detail" data-testid="plan-detail">
+      <div className="qa-detail-head">
+        <span className="pill sq accent" style={{fontSize:10}}>{TYPE[detail.type] || "PLAN"}</span>
+        <span className="dr-id">{detail.id}</span>
+        <h2 style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{detail.title}</h2>
+      </div>
+      <div className="qa-detail-body">
+        {roll.total > 0 && (
+          <div style={{margin:"0 0 14px", padding:"10px 12px", borderRadius:6, border:"1px solid var(--border)", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap"}}>
+            <span style={{fontSize:10.5, color:"var(--fg-faint)", textTransform:"uppercase", letterSpacing:.5, fontWeight:600}}>{detail.type === "release" ? "Release readiness" : "Execution"}</span>
+            <ExecBar roll={roll}/>
+            <span style={{fontSize:11, color:"var(--fg-muted)"}}>{roll.pass} pass · {roll.fail} fail · {roll.flaky} flaky · {roll.notRun} not run — {roll.total} cases · {automatedCount} automated{blockedStoryCount > 0 ? " · " : ""}{blockedStoryCount > 0 && <span style={{color:"var(--warn)"}}>⛔ {blockedStoryCount} blocked</span>}</span>
+          </div>
+        )}
+
+        {metas.length > 0 && (
+          <div className="qa-meta-grid" style={{marginBottom:16}}>
+            {metas.map(k => <div className="qa-meta" key={k}><span className="k">{k}</span><span>{clean(f[k])}</span></div>)}
+          </div>
+        )}
+
+        {planSections.length > 0 && (
+          <Section title={sectionGroupTitle}>
+            <div>
+              {planSections.map((s, i) => <SectionCard key={i} heading={s.heading} content={s.content} defaultOpen={sectionOpen(s.heading)}/>)}
+            </div>
+          </Section>
+        )}
+
+        {stories.length > 0 && (
+          <Section title={"Covered stories (" + stories.length + ") — click to open in Test Cases"}>
+            <div style={{display:"flex", flexDirection:"column", gap:1}}>
+              {stories.map(s => (
+                <div key={s.sid} className="qa-plan-item" style={{cursor:"pointer"}} onClick={()=>onNavigate && onNavigate("tests", { story: s.sid })}>
+                  <span className="qa-plan-dot"><StatusDot status={s.st}/></span>
+                  <span className="qa-plan-id">{s.sid}</span>
+                  <span className="qa-plan-label" style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{s.title}</span>
+                  {s.blocked && <span title={s.blockedReason} style={{flexShrink:0, fontSize:11}}>⛔</span>}
+                  <span style={{fontSize:10, color:"var(--fg-faint)", fontFamily:"var(--font-mono)", flexShrink:0}}>{s.count} {s.count===1?"case":"cases"} ›</span>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {planCards.length > 0 && (
+          <Section title="Automation">
+            <div style={{display:"flex", alignItems:"center", gap:10, fontSize:12, color:"var(--fg-muted)"}}>
+              <span>{automatedCount}/{planCards.length} cases have a Maestro flow</span>
+              {detail.flowId
+                ? <button className="btn ghost sm" onClick={()=>onNavigate && onNavigate("maestro", { flow: detail.flowId })}>→ Maestro · {detail.flowId}</button>
+                : <span style={{fontSize:11, color:"var(--fg-faint)"}}>no automated flow written yet</span>}
+            </div>
+          </Section>
+        )}
+
+        {linkedUf && (
+          <Section title="User flow (screens)">
+            <button className="chip" onClick={()=>onSelectPlan && onSelectPlan(linkedUf.id)} title={linkedUf.title}>{linkedUf.id} · {linkedUf.title}</button>
+            {onNavigate && <button className="btn ghost sm" style={{marginLeft:6}} onClick={()=>onNavigate("appmap")}>→ App Map</button>}
+          </Section>
+        )}
+
+        {detail.type === "userflow" && (
+          <Section title="Screen flow">
+            {detail.flowGraph
+              ? <MermaidBlock code={detail.flowGraph}/>
+              : <span style={{fontSize:12, color:"var(--fg-faint)"}}>No screen-flow graph in this user flow.</span>}
+            {onNavigate && <button className="btn ghost sm" style={{marginTop:6}} onClick={()=>onNavigate("appmap")}>→ Open App Map</button>}
+          </Section>
+        )}
+
+        {crossPlans.length > 0 && (
+          <Section title={crossTitle}>
+            <div style={{display:"flex", flexWrap:"wrap", gap:6}}>
+              {crossPlans.map(p => (
+                <button key={p.id} className="chip" onClick={()=>onSelectPlan && onSelectPlan(p.id)} title={p.title}>{p.id} · {p.title.length>22 ? p.title.slice(0,22)+"…" : p.title}</button>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {bodyHtml && (
+          <div>
+            <button className="btn ghost sm" onClick={()=>setShowDoc(v=>!v)} style={{marginBottom:10}}>{showDoc ? "▾ Hide raw document" : "▸ Full plan document (raw)"}</button>
+            {showDoc && <div className="md-doc" dangerouslySetInnerHTML={{__html: bodyHtml}}/>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PlansView({ onNavigate, focusPlan }) {
+  const { PLANS, TEST_CASES, ACTIVE_PROJECT_CONFIG } = window.MORBIUS;
+  const idx = PLANS || { items: [], releases: [] };
+  const items = idx.items || [];
+  const qaPlan = items.find(i => i.type === "qa");
+  const flows = items.filter(i => i.type === "flow").sort((a,b)=>a.id.localeCompare(b.id));
+  const userflows = items.filter(i => i.type === "userflow").sort((a,b)=>a.id.localeCompare(b.id));
+  const releases = idx.releases || [];
+  const releasePlansCount = releases.filter(r => r.trId).length;
+  const missingCount = releases.filter(r => !r.trId).length;
+  const trItem = id => items.find(i => i.type === "release" && i.id === id);
+  // Phase C: overall passing across the planned suite — stories covered by FLOW + RELEASE plans.
+  // (The QA Plan operating doc indexes nearly every story, so it's excluded from this denominator.)
+  const allStoryIds = Array.from(new Set(items.filter(i => i.type === "flow" || i.type === "release").flatMap(i => i.storyIds || [])));
+  const overall = planExecRollup(allStoryIds);
+
+  const slug = (ACTIVE_PROJECT_CONFIG && ACTIVE_PROJECT_CONFIG.pmagentSlug) || "";
+  const [pushing, setPushing] = aS(false);
+  const [pushMsg, setPushMsg] = aS(null);
+  const pushFromPMAgent = async () => {
+    if (!slug || pushing) return;
+    setPushing(true); setPushMsg(null);
+    try {
+      const r = await fetch("/api/pmagent/transfer", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ pmagentSlug: slug }) });
+      const j = await r.json();
+      if (j.ok) { setPushMsg("✓ plans refreshed from PMAgent"); await window.loadMorbiusData(); }
+      else setPushMsg("✗ " + (j.error || ("HTTP " + r.status)));
+    } catch (e) { setPushMsg("✗ " + String(e)); }
+    setPushing(false);
+  };
+
+  const firstId = (qaPlan && qaPlan.id) || (flows[0] && flows[0].id) || null;
+  const [selId, setSelId] = aS(focusPlan || firstId);
+  const [detail, setDetail] = aS(null);
+  aE(() => { if (focusPlan) setSelId(focusPlan); }, [focusPlan]);   // cross-nav: open a specific plan
+
+  aE(() => {
+    if (!selId) { setDetail(null); return; }
+    let cancelled = false; setDetail(null);
+    fetch("/api/plans/" + encodeURIComponent(selId))
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setDetail(d && typeof d === "object" ? d : { error: true }); })
+      .catch(() => { if (!cancelled) setDetail({ error: true }); });
+    return () => { cancelled = true; };
+  }, [selId]);
+
+  if (!items.length) {
+    return (
+      <div className="view-body">
+        <div className="card" style={{padding:40, textAlign:"center", color:"var(--fg-muted)", lineHeight:1.6}}>
+          No QA plans imported yet.<br/>
+          {slug
+            ? <button className="btn primary sm" style={{marginTop:12}} onClick={pushFromPMAgent} disabled={pushing}>{pushing ? "Pushing…" : "↻ Push from PMAgent"}</button>
+            : <span>Link this project to a PMAgent slug, then push — the QA Plan, Flow Plans, and Release Plans come over with the test cases.</span>}
+          {pushMsg && <div style={{marginTop:10, fontSize:12, color: pushMsg[0]==="✓" ? "var(--ok)" : "var(--fail)"}}>{pushMsg}</div>}
+        </div>
+      </div>
+    );
+  }
+
+  const Row = ({ id, label, sub, on, dim, roll, onClick }) => (
+    <div className={"qa-plan-item " + (selId===id ? "active" : "")}
+         onClick={dim ? undefined : onClick}
+         style={dim ? {opacity:.5, cursor:"default"} : {cursor:"pointer"}}>
+      <span style={{width:8, height:8, borderRadius:"50%", flexShrink:0, marginRight:2, background: on ? "var(--accent)" : "transparent", border: on ? "none" : "1px solid var(--border)"}}/>
+      <span className="qa-plan-id">{label}</span>
+      <span className="qa-plan-label" style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{sub}</span>
+      {roll && roll.total > 0 && <ExecBar roll={roll} compact={true}/>}
+    </div>
+  );
+
+  return (
+    <div className="qa-master">
+      <div className="qa-list">
+        <div className="qa-coverage-bar">
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:8}}>
+            <div className="qa-coverage-label">QA plan suite</div>
+            {slug && <button className="btn ghost sm" onClick={pushFromPMAgent} disabled={pushing} title={"Re-import QA / Flow / Release plans from PMAgent (" + slug + ")"}>{pushing ? "Pushing…" : "↻ Push"}</button>}
+          </div>
+          <div className="qa-coverage-summary">{flows.length} flow plans · {releasePlansCount}/{releases.length} releases planned{missingCount ? " · " + missingCount + " without a plan" : ""}</div>
+          {overall.total > 0 && (
+            <div className="qa-coverage-summary" style={{display:"flex", alignItems:"center", gap:6, marginTop:5}}>
+              <ExecBar roll={overall}/> <span>cases passing across planned stories</span>
+            </div>
+          )}
+          {pushMsg && <div className="qa-coverage-summary" style={{marginTop:5, color: pushMsg[0]==="✓" ? "var(--ok)" : "var(--fail)"}}>{pushMsg}</div>}
+        </div>
+
+        {qaPlan && (
+          <React.Fragment>
+            <div className="qa-section-label"><span>QA PLAN</span></div>
+            <Row id={qaPlan.id} label={qaPlan.fields.Version ? "v"+qaPlan.fields.Version : "plan"} sub={qaPlan.title} on={true} onClick={()=>setSelId(qaPlan.id)}/>
+          </React.Fragment>
+        )}
+
+        {flows.length > 0 && (
+          <React.Fragment>
+            <div className="qa-section-label"><span>FLOW PLANS</span><span style={{color:"var(--fg-faint)", fontWeight:400, marginLeft:4}}>({flows.length})</span></div>
+            {flows.map(fp => <Row key={fp.id} id={fp.id} label={fp.id} sub={fp.title} on={true} roll={planExecRollup(fp.storyIds)} onClick={()=>setSelId(fp.id)}/>)}
+          </React.Fragment>
+        )}
+
+        {userflows.length > 0 && (
+          <React.Fragment>
+            <div className="qa-section-label"><span>USER FLOWS</span><span style={{color:"var(--fg-faint)", fontWeight:400, marginLeft:4}}>({userflows.length})</span></div>
+            {userflows.map(uf => <Row key={uf.id} id={uf.id} label={uf.id} sub={uf.title} on={true} roll={planExecRollup(uf.storyIds)} onClick={()=>setSelId(uf.id)}/>)}
+          </React.Fragment>
+        )}
+
+        {releases.length > 0 && (
+          <React.Fragment>
+            <div className="qa-section-label"><span>RELEASE PLANS</span></div>
+            {releases.map(r => r.trId
+              ? <Row key={r.id} id={r.trId} label={r.trId} sub={r.title} on={true} roll={planExecRollup((trItem(r.trId)||{}).storyIds)} onClick={()=>setSelId(r.trId)}/>
+              : <Row key={r.id} id={r.id} label={"TR-"+r.id.replace(/^R-/,"")} sub={r.title + " — no plan yet"} on={false} dim={true}/>)}
+          </React.Fragment>
+        )}
+
+        <div className="qa-section-label"><span>STORY PLANS</span></div>
+        <div className="qa-plan-item" onClick={()=>onNavigate && onNavigate("tests")} style={{cursor:"pointer"}}>
+          <span style={{width:8, height:8, borderRadius:"50%", flexShrink:0, marginRight:2, background:"var(--fg-faint)"}}/>
+          <span className="qa-plan-id">{TEST_CASES.length}</span>
+          <span className="qa-plan-label">test cases → open Test Cases ›</span>
+        </div>
+      </div>
+      <PlanDetail detail={detail} items={items} onSelectPlan={setSelId} onNavigate={onNavigate}/>
+    </div>
+  );
+}
+
 function App() {
   const initialTweaks = aM(() => {
     const saved = (()=>{try{return JSON.parse(localStorage.getItem("morbius-tweaks")||"null")}catch{return null}})();
     return { ...(window.__TWEAKS__||{}), ...(saved||{}) };
   }, []);
   const [tweaks, setTweaks] = aS(initialTweaks);
-  const [view, setView] = aS(() => localStorage.getItem("morbius-view") || "dashboard");
+  // Validate the persisted view key — a stale/renamed key from an older build used
+  // to land on a "Settings" header over an empty body. Unknown → dashboard.
+  const KNOWN_VIEWS = ["dashboard","tests","plans","bugs","devices","runs","maestro","automation-plan","appmap","healing","settings"];
+  const [view, setView] = aS(() => {
+    const saved = localStorage.getItem("morbius-view");
+    return KNOWN_VIEWS.includes(saved) ? saved : "dashboard";
+  });
+  const [navFilter, setNavFilter] = aS(null);   // {story}|{flow} — filtered cross-nav from the QA Plan hub
   const [chatOpen, setChatOpen] = aS(false);
   const [searchOpen, setSearchOpen] = aS(false);
   const [selTest, setSelTest] = aS(null);
@@ -12858,6 +13049,7 @@ function App() {
   const heading = {
     dashboard: { t:"Dashboard", s:'Suite health across ' + TEST_CASES.length + ' cases · ' + projName },
     tests: { t:"Test Cases", s:TEST_CASES.length + ' cases across ' + catCount + ' categories' },
+    plans: { t:"QA Plan", s:"Test strategy, flow plans and release readiness · " + projName },
     bugs: { t:"Bugs", s:BUGS.filter(b=>b.status==='open'||b.status==='investigating').length + ' open · ' + BUGS.filter(b=>b.jira).length + ' linked to Jira' },
     devices: { t:"Devices", s:'Coverage across ' + (ACTIVE_PROJECT_CONFIG && ACTIVE_PROJECT_CONFIG.devices ? ACTIVE_PROJECT_CONFIG.devices.length : 4) + ' targets' },
     runs: { t:"Runs", s:"Run trend and history" },
@@ -12866,7 +13058,7 @@ function App() {
     appmap: { t:"App Map", s:"Screen flow for " + projName },
     healing: { t:"Healing Queue", s:"Self-heal proposals from failed Maestro runs" },
     settings: { t:"Settings", s:"Workspace & personal preferences" },
-  }[view] || { t:"Settings", s:"" };
+  }[view] || { t:"Dashboard", s:"" };
 
   // Human-readable "last refreshed X ago"
   const sinceRefresh = (() => {
@@ -12926,43 +13118,49 @@ function App() {
 
   let body;
   // Navigate to a view, optionally scrolling to a section anchor
-  const handleNavigate = (target, anchor) => {
+  const handleNavigate = (target, opts) => {
     setView(target);
-    if (anchor) {
+    const o = typeof opts === "string" ? { anchor: opts } : (opts || {});
+    setNavFilter((o.story || o.flow || o.plan) ? o : null);   // remember a story/flow/plan focus for the target view
+    if (o.anchor) {
       setTimeout(() => {
-        const el = document.querySelector(\`[data-sec="\${anchor}"]\`);
+        const el = document.querySelector(\`[data-sec="\${o.anchor}"]\`);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 120);
     }
   };
+  // Manual nav (sidebar / topnav) clears any cross-nav filter so views aren't stuck filtered.
+  const navTo = (v) => { setNavFilter(null); setView(v); };
 
   if (view === "dashboard") body = <DashboardView key={updateKey} onSelectTest={setSelTest} onSelectBug={setSelBug} onNavigate={handleNavigate}/>;
-  else if (view === "tests") body = <TestsView key={updateKey} onSelectTest={setSelTest} rowMode={rowMode} setRowMode={setRowMode}/>;
+  else if (view === "tests") body = <TestsView key={updateKey} onSelectTest={setSelTest} rowMode={rowMode} setRowMode={setRowMode} focusStory={view==="tests" && navFilter ? navFilter.story : null} onNavigate={handleNavigate}/>;
+  else if (view === "plans") body = <PlansView key={updateKey} onNavigate={handleNavigate} focusPlan={view==="plans" && navFilter ? navFilter.plan : null}/>;
   else if (view === "bugs") body = <BugsView key={updateKey} onSelectBug={setSelBug}/>;
   else if (view === "devices") body = <DevicesView key={updateKey}/>;
   else if (view === "runs") body = <RunsView key={updateKey}/>;
-  else if (view === "maestro") body = <MaestroView key={updateKey}/>;
+  else if (view === "maestro") body = <MaestroView key={updateKey} focusFlow={view==="maestro" && navFilter ? navFilter.flow : null}/>;
   else if (view === "automation-plan") body = <AutomationPlanView key={updateKey}/>;
   else if (view === "appmap") body = <AppMapView key={updateKey}/>;
   else if (view === "healing") body = <HealingQueueView key={updateKey}/>;
   else if (view === "settings") body = <SettingsView tweaks={tweaks} setTweak={setTweak}/>;
+  else body = <DashboardView key={updateKey} onSelectTest={setSelTest} onSelectBug={setSelBug} onNavigate={handleNavigate}/>;  // unknown view → never a blank main
 
   return (
     <div className="app" data-layout={tweaks.layout || "sidebar"}>
       <Topbar view={view} theme={tweaks.theme||"dark"} setTheme={setTheme} onChat={() => setChatOpen(o => !o)} onSearch={() => setSearchOpen(true)} layout={tweaks.layout} onSync={refreshData} onRunSuite={() => setView(window.MORBIUS?.ACTIVE_PROJECT_CONFIG?.projectType === 'web' ? 'tests' : 'maestro')} onSettings={() => setView("settings")} refreshing={refreshing}/>
       {tweaks.layout === "topnav"
-        ? <Topnav view={view} setView={setView}/>
-        : <Sidebar view={view} setView={setView} onProjectSwitch={() => { setView('dashboard'); forceUpdate(k=>k+1); }}/>}
+        ? <Topnav view={view} setView={navTo}/>
+        : <Sidebar view={view} setView={navTo} onProjectSwitch={() => { setView('dashboard'); forceUpdate(k=>k+1); }}/>}
       <main className="main">
         {view !== "settings" && <ViewHeader title={heading.t} sub={heading.s} actions={headerActions}/>}
         {view === "tests" || view === "bugs" ? body : view === "settings" ? body : <div className="view-body">{body}</div>}
       </main>
 
       <ChatDrawer open={chatOpen} onClose={() => setChatOpen(false)}/>
-      <TestDrawer test={selTest} onClose={() => setSelTest(null)} onSelectBug={setSelBug} setView={setView}/>
+      <TestDrawer test={selTest} onClose={() => setSelTest(null)} onSelectBug={setSelBug} setView={navTo}/>
       <BugDrawer bug={selBug} onClose={() => setSelBug(null)} onSelectTest={(testId) => { const t = window.MORBIUS?.TEST_CASES?.find(t => t.id === testId); if (t) { setSelBug(null); setSelTest(t); } }}/>
       <TweaksPanel tweaks={tweaks} setTweak={setTweak}/>
-      {searchOpen && <SearchModal index={searchIndex} onClose={()=>setSearchOpen(false)} setView={setView} setSelTest={setSelTest} setSelBug={setSelBug}/>}
+      {searchOpen && <SearchModal index={searchIndex} onClose={()=>setSearchOpen(false)} setView={navTo} setSelTest={setSelTest} setSelBug={setSelBug}/>}
     </div>
   );
 }

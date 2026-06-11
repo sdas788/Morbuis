@@ -518,16 +518,34 @@ export function loadAllRuns(dataDir?: string): TestRun[] {
   if (!fs.existsSync(runsDir)) return [];
 
   return fs.readdirSync(runsDir)
-    .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
+    // Read yaml suite-runs AND the .json run records writeRunRecord actually produces;
+    // skip the *-latest.json pointer files (those are LatestRunPointer, not full records).
+    .filter(f => (f.endsWith('.yaml') || f.endsWith('.yml') || f.endsWith('.json')) && !f.endsWith('-latest.json'))
     .map(f => {
       try {
         const raw = fs.readFileSync(path.join(runsDir, f), 'utf-8');
+        if (f.endsWith('.json')) {
+          // MaestroRunRecord / web RunRecord → map onto the TestRun shape the dashboard expects.
+          const rec = JSON.parse(raw) as Record<string, unknown>;
+          if (!rec || !rec.runId || !rec.testId) return null;
+          const ts = (rec.endTime || rec.startTime || rec.timestamp || '') as string;
+          const raw0 = rec.status as string;
+          const st = (raw0 === 'passed' ? 'pass' : raw0 === 'failed' ? 'fail' : raw0) as TestStatus;
+          const device = rec.device as string | undefined;
+          return {
+            id: rec.runId as string,
+            timestamp: ts,
+            devices: device ? [device] : [],
+            results: [{ test: rec.testId as string, device, status: st, durationMs: rec.durationMs as number | undefined }],
+            summary: { total: 1, passed: st === 'pass' ? 1 : 0, failed: st === 'fail' ? 1 : 0, flaky: st === 'flaky' ? 1 : 0, notRun: st === 'not-run' ? 1 : 0 },
+          } as TestRun;
+        }
         const { data } = matter(raw);
         return data as TestRun;
       } catch { return null; }
     })
     .filter((r): r is TestRun => r !== null)
-    .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
 }
 
 // --- Bug Impact (E-016 / S-016-001) ---

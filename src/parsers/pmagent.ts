@@ -250,7 +250,14 @@ function splitACs(section: string): string[] {
   const acs: string[] = [];
   let current = '';
   const isBulletStart = (l: string) => /^\s*(-\s*\[\s*[xX ]?\s*\]|-\s+|\d+[.)]\s+|\*\*Given\*\*)/.test(l);
+  // Sub-section headings (e.g. "### Reset Password flow") group ACs but are NOT themselves ACs.
+  // Drop them — otherwise the heading text leaks out as a junk one-line "test case".
+  const isHeading = (l: string) => /^\s*#{1,6}\s+\S/.test(l);
   for (const line of lines) {
+    if (isHeading(line)) {
+      if (current.trim()) { acs.push(normalizeAC(current)); current = ''; }
+      continue;
+    }
     if (isBulletStart(line)) {
       if (current.trim()) acs.push(normalizeAC(current));
       current = line;
@@ -275,12 +282,20 @@ function normalizeAC(text: string): string {
 }
 
 function deriveTitle(ac: string, storyTitle: string, acIndex: number): string {
-  // Strip any residual markdown/bold artifacts before deriving the title.
-  const cleaned = ac.replace(/\*+/g, '').replace(/[`_]/g, '').replace(/\s+/g, ' ').trim();
-  // Try to derive a short title from "Given <X>, when <Y>, then <Z>" — use the When clause.
-  const m = cleaned.match(/when\s+([^,]+?)[,]\s*then/i);
-  if (m && m[1].length > 5 && m[1].length <= 80) {
-    return capitalize(m[1].trim().replace(/[.;]+$/, ''));
+  // Strip markdown/bold artifacts AND any embedded "TC-NNN-NNN-NNN" id marker the source AC
+  // carries (PMAgent convention) so it doesn't leak into the title.
+  const cleaned = ac.replace(/\*+/g, '').replace(/[`_]/g, '')
+    .replace(/^\s*\[\s*[xX ]?\s*\]\s*/, '')              // residual checkbox
+    .replace(/^\s*TC-\d{3}-\d{3}-\d{3}[a-z]?\s*/i, '')   // embedded test-case id
+    .replace(/\s+/g, ' ').trim();
+  // For Given/When/Then ACs the THEN clause (the expected outcome) is the most descriptive single
+  // phrase — it states what the test verifies. Prefer it; then the WHEN action; then the full text.
+  const truncate = (t: string) => { const s = t.trim().replace(/[.;]+$/, ''); return capitalize(s.length <= 80 ? s : s.slice(0, 77).trim() + '…'); };
+  const thenM = cleaned.match(/(?:^|[,]\s*)then\s+(.+)$/i);
+  if (thenM && thenM[1].trim().length > 5) return truncate(thenM[1]);
+  const whenM = cleaned.match(/when\s+([^,]+?)[,]\s*then/i);
+  if (whenM && whenM[1].length > 5 && whenM[1].length <= 80) {
+    return capitalize(whenM[1].trim().replace(/[.;]+$/, ''));
   }
   const fallback = cleaned.slice(0, 70).trim();
   return fallback.length > 5 ? fallback : (storyTitle + ' — AC ' + (acIndex + 1));
@@ -338,6 +353,27 @@ function slugify(text: string): string {
 function sha256Norm(text: string): string {
   const norm = text.replace(/\s+/g, ' ').trim().toLowerCase();
   return crypto.createHash('sha256').update(norm).digest('hex').slice(0, 16);
+}
+
+// Phase 3 (traceability/drift): recompute the source checksum the importer would produce TODAY for
+// a given card, so Morbius can flag when the upstream PMAgent AC / test-plan text changed since
+// import. Mirrors parsePMAgentProject's rawText derivation exactly (same helpers) — an unchanged
+// source yields the identical 16-hex checksum. Returns null if the source/AC can't be resolved.
+export function recomputeSourceChecksum(sourcePath: string, acIndex: number): string | null {
+  try {
+    if (!sourcePath || !fs.existsSync(sourcePath)) return null;
+    const data = readFrontmatter(sourcePath);
+    if (!data) return null;
+    let rawText: string | null;
+    if (/^T-/i.test(path.basename(sourcePath))) {
+      // Test-plan-backed card: whole body, sliced as on import.
+      rawText = data.body.slice(0, 4000);
+    } else {
+      // Story-AC card: the specific AC at acIndex.
+      rawText = splitACs(extractSection(data.body, 'Acceptance Criteria'))[acIndex] ?? null;
+    }
+    return rawText == null ? null : sha256Norm(rawText);
+  } catch { return null; }
 }
 
 function escapeRe(s: string): string {
