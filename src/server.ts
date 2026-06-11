@@ -79,6 +79,11 @@ export function startServer(port: number): void {
     if (pathname === '/app.js') {
       const js = getCompiledDashboardJS();
       if (js !== null) {
+        if (req.headers['if-none-match'] === getCompiledDashboardETag()) {
+          res.writeHead(304);
+          res.end();
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache', 'ETag': getCompiledDashboardETag() });
         res.end(js);
       } else {
@@ -6746,9 +6751,10 @@ select.inp { padding-right: 24px; }
 }
 .empty-state .es-hint { color: var(--fg-faint); font-size: 11.5px; }
 
-/* Drawer head: id/status/actions on row 1, full title wraps on its own row. */
-.drawer-head { flex-wrap: wrap; row-gap: 4px; }
-.drawer-head h2 {
+/* Drawer + board detail heads: id/status/actions on row 1, full title wraps on its
+   own row — inline nowrap-ellipsis squeezed long titles to "Sa…" next to the Run buttons. */
+.drawer-head, .qa-detail-head { flex-wrap: wrap; row-gap: 4px; }
+.drawer-head h2, .qa-detail-head h2 {
   flex-basis: 100%; order: 10;
   white-space: normal; line-height: 1.4;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -7916,7 +7922,7 @@ function TestPlanDetail({ test, onOpenFull, onNavigate }) {
       <div className="qa-detail-head">
         <span className="dr-id">{test.id}</span>
         <StatusPill status={test.status}/>
-        <h2 style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{test.title}</h2>
+        <h2>{test.title}</h2>
         <RunButtons test={test} onRunFinished={() => setRuns(null)}/>
         <FileBugButton test={test}/>
         {onOpenFull && <button className="btn ghost sm" onClick={() => onOpenFull(test)} title="Open full detail drawer">Full</button>}
