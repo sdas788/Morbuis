@@ -2,12 +2,12 @@
 
 **ID:** R-002
 **Project:** morbius
-**Stage:** Draft
-**Status:** Planned
+**Stage:** Ready
+**Status:** In Progress
 **Priority:** P0
 **Version:** 1.0
 **Created:** 2026-04-23
-**Updated:** 2026-04-23
+**Updated:** 2026-06-10
 
 ---
 
@@ -115,3 +115,4 @@
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created — R-002 expansion plan tracking E-013–E-022, all 34 stories |
+| 2026-06-10 | 1.1 | Claude | Status Planned→In Progress; Stage Draft→Ready — board drift correction. Phases 0–1 (E-013–E-017, 20 stories) verified Done in code; Phases 2–6 (E-018–E-022) not started — E-018/E-019 todo, E-020 gated, E-021 parked, E-022 decision-only. |

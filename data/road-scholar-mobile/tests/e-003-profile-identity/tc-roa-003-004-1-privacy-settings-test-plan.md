@@ -2,7 +2,7 @@
 id: TC-ROA-003-004-1
 title: Privacy Settings — Test Plan
 category: e-003-profile-identity
-scenario: Negative
+scenario: Happy Path
 status: not-run
 priority: P2
 platforms:
@@ -12,7 +12,7 @@ tags:
   - s-003-004
   - e-003
 created: '2026-05-26'
-updated: '2026-05-26'
+updated: '2026-06-08'
 pmagent_source:
   slug: roadscholar-mobile
   story_id: S-003-004

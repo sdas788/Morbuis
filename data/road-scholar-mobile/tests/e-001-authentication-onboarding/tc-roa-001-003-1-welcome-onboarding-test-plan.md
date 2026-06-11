@@ -12,7 +12,7 @@ tags:
   - s-001-003
   - e-001
 created: '2026-05-26'
-updated: '2026-05-26'
+updated: '2026-06-08'
 pmagent_source:
   slug: roadscholar-mobile
   story_id: S-001-003

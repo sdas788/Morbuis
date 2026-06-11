@@ -2,7 +2,7 @@
 id: TC-ROA-002-003-1
 title: Create Post — Test Plan
 category: e-002-group-community
-scenario: Negative
+scenario: Happy Path
 status: not-run
 priority: P1
 platforms:
@@ -12,7 +12,7 @@ tags:
   - s-002-003
   - e-002
 created: '2026-05-26'
-updated: '2026-05-26'
+updated: '2026-06-08'
 pmagent_source:
   slug: roadscholar-mobile
   story_id: S-002-003

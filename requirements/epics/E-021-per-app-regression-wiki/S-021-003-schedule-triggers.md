@@ -3,12 +3,12 @@
 **ID:** S-021-003
 **Project:** morbius
 **Epic:** E-021
-**Stage:** Draft
-**Status:** Todo (DRIFT)
+**Stage:** Parked
+**Status:** Parked
 **Priority:** P4
 **Version:** 1.0
 **Created:** 2026-04-23
-**Updated:** 2026-04-23
+**Updated:** 2026-06-10
 
 ---
 
@@ -43,3 +43,4 @@ As a QA lead, I want the regression plan to show when the next run is due and op
 | Date | Version | Author | Change |
 |------|---------|--------|--------|
 | 2026-04-23 | 1.0 | Claude | Created |
+| 2026-06-10 | 1.1 | Claude | Status Todo (DRIFT)→Parked — re-confirmed parked per E-021 drift-flag instruction. Never built (no regression-plan/scheduler code exists). Read-only plan visibility now partially met by the E-029 QA Plan viewer; editable regression plans + cron scheduling stay deferred (maintenance-heavy, low differentiation). Revisit only if a client explicitly needs scheduled regression runs. |

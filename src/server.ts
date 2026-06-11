@@ -1033,7 +1033,14 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
       const registry = loadProjectRegistry();
       const projectId = registry.activeProject;
       const cfg = loadProjectConfig(projectId);
-      const tests = loadAllTestCases(dir);
+      // E-028↔E-029 alignment: the triage universe is the CURATED catalog. Cards in
+      // reviewEpics-quarantined epics (Triage Shelf) are raw imports, not automation
+      // candidates — same rule the Test Cases board applies, so both tabs reconcile.
+      const regProj = registry.projects.find(p => p.id === projectId) as { reviewEpics?: string[] } | undefined;
+      const reviewEpics = (regProj && regProj.reviewEpics) || cfg?.reviewEpics || [];
+      const allTests = loadAllTestCases(dir);
+      const tests = allTests.filter(t => !reviewEpics.some(p => (t.category || '').startsWith(p)));
+      const quarantined = allTests.length - tests.length;
       const plan: AutomationPlan = loadAutomationPlan(projectId) || { projectId, updatedAt: '', candidates: [], flows: [] };
       // Lightweight test projection for the triage list.
       const testRows = tests.map(t => ({
@@ -1042,7 +1049,8 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
         tags: t.tags, platforms: t.platforms,
       }));
       const byDecision = { automate: 0, manual: 0, blocked: 0, defer: 0, untriaged: 0 };
-      const triaged = new Set(plan.candidates.map(c => c.testId));
+      const activeIds = new Set(tests.map(t => t.id));
+      const triaged = plan.candidates.filter(c => activeIds.has(c.testId)).length;
       for (const t of tests) {
         const c = plan.candidates.find(x => x.testId === t.id);
         if (!c) byDecision.untriaged++;
@@ -1057,6 +1065,12 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
         const fp = path.join(flowsDir, f.id + '.yaml');
         if (fs.existsSync(fp)) { try { flowFiles[f.id] = { path: fp, yaml: fs.readFileSync(fp, 'utf-8') }; } catch { /* skip */ } }
       }
+      // Same "automated" definition the QA Plan view uses (loadMorbiusData Phase 3):
+      // a direct YAML link on the card, or membership in a written/passing flow.
+      const writtenTestIds = new Set(plan.flows
+        .filter(f => f.status === 'written' || f.status === 'passing' || flowFiles[f.id])
+        .flatMap(f => f.testIds || []));
+      const automatedCases = tests.filter(t => t.maestroFlowAndroid || t.maestroFlowIos || t.maestroFlow || writtenTestIds.has(t.id)).length;
       json(res, {
         projectId,
         tests: testRows,
@@ -1066,12 +1080,14 @@ function handleApi(pathname: string, url: URL, req: http.IncomingMessage, res: h
         personas: cfg?.testAccounts || [],
         summary: {
           totalTests: tests.length,
-          triaged: triaged.size,
+          quarantined,
+          triaged,
           byDecision,
           totalFlows: plan.flows.length,
           flowsByStatus,
           automatableNow: plan.flows.length - blockedFlows,
           blockedFlows,
+          automatedCases,
         },
       });
       return;
@@ -6997,6 +7013,9 @@ async function loadMorbiusData() {
     RUN_HISTORY, ACTIVITY, SAMPLE_YAML,
     PROJECTS, ACTIVE_PROJECT, ACTIVE_PROJECT_CONFIG,
     PLANS,
+    // E-028↔E-029 alignment: the QA Plan detail lists the automation flows covering a
+    // plan's stories LIVE (replaces the stale import-time flowId match in plans.json).
+    AUTOMATION: { flows: planData.flows || [], candidates: planData.candidates || [], summary: planData.summary || {} },
   };
 }
 

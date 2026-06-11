@@ -2,7 +2,7 @@
 id: TC-ROA-005-001-1
 title: Push Notification Delivery — Test Plan
 category: e-005-notifications-preferences
-scenario: Negative
+scenario: Happy Path
 status: not-run
 priority: P2
 platforms:
@@ -12,7 +12,7 @@ tags:
   - s-005-001
   - e-005
 created: '2026-05-26'
-updated: '2026-05-26'
+updated: '2026-06-08'
 pmagent_source:
   slug: roadscholar-mobile
   story_id: S-005-001

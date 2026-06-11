@@ -1,0 +1,515 @@
+{
+  "generatedAt": "2026-06-10T16:21:35.851Z",
+  "items": [
+    {
+      "type": "flow",
+      "id": "TF-001",
+      "title": "Login & Onboarding",
+      "fields": {
+        "ID": "TF-001",
+        "Project": "roadscholar-mobile",
+        "Flow": "[UF-001 Login & Onboarding](../flows/UF-001-login-onboarding.md)",
+        "Type": "Flow regression — evergreen, re-run every release + nightly",
+        "Stage": "Active",
+        "Version": "2.0",
+        "Created": "2026-05-19",
+        "Updated": "2026-05-19",
+        "Owner": "QA Agent (curated by PM)",
+        "Style": "Journeys (continuous end-to-end Maestro flows)"
+      },
+      "file": "TF-001-login-onboarding.md",
+      "storyIds": [
+        "S-001-001",
+        "S-001-003",
+        "S-001-004",
+        "S-001-002"
+      ],
+      "ufId": "UF-001"
+    },
+    {
+      "type": "flow",
+      "id": "TF-002",
+      "title": "Group Browsing & Discussion",
+      "fields": {
+        "ID": "TF-002",
+        "Project": "roadscholar-mobile",
+        "Flow": "[UF-002 Group Browsing & Discussion](../flows/UF-002-group-browsing-discussion.md)",
+        "Type": "Flow regression — evergreen, re-run every release + nightly",
+        "Stage": "Active",
+        "Version": "2.0",
+        "Created": "2026-05-19",
+        "Updated": "2026-05-19",
+        "Owner": "QA Agent (curated by PM)",
+        "Style": "Journeys (continuous end-to-end Maestro flows)"
+      },
+      "file": "TF-002-group-browsing-discussion.md",
+      "storyIds": [
+        "S-002-001",
+        "S-002-002",
+        "S-002-005",
+        "S-002-006",
+        "S-006-001",
+        "S-002-003",
+        "S-002-004",
+        "S-002-007",
+        "S-002-008",
+        "S-002-009",
+        "S-006-002"
+      ],
+      "ufId": "UF-002"
+    },
+    {
+      "type": "flow",
+      "id": "TF-003",
+      "title": "Profile Management",
+      "fields": {
+        "ID": "TF-003",
+        "Project": "roadscholar-mobile",
+        "Flow": "[UF-003 Profile Management](../flows/UF-003-profile-management.md)",
+        "Type": "Flow regression — evergreen, re-run every release + nightly",
+        "Stage": "Active",
+        "Version": "1.0",
+        "Created": "2026-05-19",
+        "Updated": "2026-05-19",
+        "Owner": "QA Agent (curated by PM)",
+        "Style": "Journeys (continuous end-to-end Maestro flows)"
+      },
+      "file": "TF-003-profile-management.md",
+      "storyIds": [
+        "S-003-001",
+        "S-003-002",
+        "S-003-003",
+        "S-003-004",
+        "S-002-002"
+      ],
+      "ufId": "UF-003",
+      "flowId": "02_profile"
+    },
+    {
+      "type": "flow",
+      "id": "TF-004",
+      "title": "Group Leader Management",
+      "fields": {
+        "ID": "TF-004",
+        "Project": "roadscholar-mobile",
+        "Flow": "[UF-004 Group Leader Management](../flows/UF-004-group-leader-management.md)",
+        "Type": "Flow regression — evergreen, re-run every release + nightly",
+        "Stage": "Active",
+        "Version": "1.0",
+        "Created": "2026-05-19",
+        "Updated": "2026-05-19",
+        "Owner": "QA Agent (curated by PM)",
+        "Style": "Journeys (continuous end-to-end Maestro flows)"
+      },
+      "file": "TF-004-group-leader-management.md",
+      "storyIds": [
+        "S-004-002",
+        "S-004-001"
+      ],
+      "ufId": "UF-004"
+    },
+    {
+      "type": "flow",
+      "id": "TF-005",
+      "title": "Offline & Reliability",
+      "fields": {
+        "ID": "TF-005",
+        "Project": "roadscholar-mobile",
+        "Flow": "[UF-005 Offline & Reliability](../flows/UF-005-offline-resilience.md)",
+        "Type": "Flow regression — evergreen, re-run every release + nightly",
+        "Stage": "Active",
+        "Version": "1.0",
+        "Created": "2026-05-22",
+        "Updated": "2026-05-22",
+        "Owner": "QA Agent (curated by PM)",
+        "Style": "Journeys (continuous end-to-end Maestro flows)"
+      },
+      "file": "TF-005-offline-resilience.md",
+      "storyIds": [
+        "S-007-001",
+        "S-007-002",
+        "S-007-003",
+        "S-007-004"
+      ],
+      "ufId": "UF-005"
+    },
+    {
+      "type": "flow",
+      "id": "TF-006",
+      "title": "Anomaly & Boundary Coverage",
+      "fields": {
+        "ID": "TF-006",
+        "Project": "roadscholar-mobile",
+        "Flow": "N/A — this plan is **not** keyed to a single UF. It exercises every input surface across the app.",
+        "Type": "Anomaly coverage — evergreen, re-run nightly. Curated head runs on every PR.",
+        "Stage": "Active",
+        "Version": "2.1",
+        "Created": "2026-05-22",
+        "Updated": "2026-05-23",
+        "Owner": "QA Agent (curated by PM, expanded organically as bugs surface)",
+        "Style": "Hybrid — **curated cases** (deterministic, must-fire-every-run) + a **Faker-based fuzz harness** (randomized, broad-coverage)"
+      },
+      "file": "TF-006-anomaly-boundary.md",
+      "storyIds": [
+        "S-009-016"
+      ]
+    },
+    {
+      "type": "qa",
+      "id": "qa-plan",
+      "title": "QA Test Plan",
+      "fields": {
+        "Project": "roadscholar-mobile",
+        "Type": "Project QA operating manual — indexes TF / TR / T plans, names test accounts, documents backend deps + teardown + workarounds + triage",
+        "Owner": "QA Agent (curated by PM)",
+        "Created": "2026-05-19",
+        "Updated": "2026-05-23",
+        "Version": "1.3"
+      },
+      "file": "qa-testplan.md",
+      "storyIds": [
+        "S-009-008",
+        "S-009-001"
+      ]
+    },
+    {
+      "type": "release-def",
+      "id": "R-001",
+      "title": "v1.0.0 Initial Launch",
+      "fields": {
+        "ID": "R-001",
+        "Project": "roadscholar-mobile",
+        "Stage": "Ready",
+        "Status": "Shipped",
+        "Version": "1.0",
+        "Created": "2026-03-28",
+        "Updated": "2026-03-28"
+      },
+      "file": "R-001-initial-launch.md",
+      "storyIds": [
+        "S-001-001",
+        "S-001-002",
+        "S-001-003",
+        "S-001-004",
+        "S-002-001",
+        "S-002-002",
+        "S-002-003",
+        "S-002-004",
+        "S-002-005",
+        "S-002-006",
+        "S-002-007",
+        "S-002-008",
+        "S-002-009",
+        "S-003-001",
+        "S-003-002",
+        "S-003-003",
+        "S-003-004",
+        "S-004-001",
+        "S-004-002",
+        "S-005-001",
+        "S-005-002",
+        "S-006-001",
+        "S-006-002",
+        "S-007-001",
+        "S-007-002",
+        "S-007-003",
+        "S-007-004",
+        "S-008-001"
+      ],
+      "flowId": "02_profile"
+    },
+    {
+      "type": "release-def",
+      "id": "R-002",
+      "title": "v1.5.0 Active Development",
+      "fields": {
+        "ID": "R-002",
+        "Project": "roadscholar-mobile",
+        "Stage": "Ready",
+        "Status": "Shipped",
+        "Version": "1.0",
+        "Created": "2026-03-28",
+        "Updated": "2026-05-23"
+      },
+      "file": "R-002-active-development.md",
+      "storyIds": [
+        "S-005-003",
+        "S-004-003",
+        "S-002-009",
+        "S-007-001"
+      ]
+    },
+    {
+      "type": "release-def",
+      "id": "R-003",
+      "title": "Quality Foundation + Native Auth",
+      "fields": {
+        "ID": "R-003",
+        "Project": "roadscholar-mobile",
+        "Stage": "Draft",
+        "Status": "Backlog",
+        "Version": "9.1",
+        "Created": "2026-05-23",
+        "Updated": "2026-05-23"
+      },
+      "file": "R-003-qa-foundation-and-native-auth.md",
+      "storyIds": [
+        "S-010-004",
+        "S-010-001",
+        "S-009-001",
+        "S-009-002",
+        "S-009-004",
+        "S-009-005",
+        "S-009-003",
+        "S-009-016",
+        "S-009-006",
+        "S-009-008",
+        "S-010-003",
+        "S-009-009",
+        "S-009-011",
+        "S-009-012",
+        "S-009-015"
+      ]
+    },
+    {
+      "type": "release-def",
+      "id": "R-004",
+      "title": "Full QA Coverage Expansion — Candidate scope (not yet committed)",
+      "fields": {
+        "ID": "R-004",
+        "Project": "roadscholar-mobile",
+        "Stage": "Draft",
+        "Status": "Backlog",
+        "Version": "5.0",
+        "Created": "2026-05-23",
+        "Updated": "2026-05-23"
+      },
+      "file": "R-004-qa-full-coverage-expansion.md",
+      "storyIds": [
+        "S-009-010",
+        "S-009-013",
+        "S-009-014",
+        "S-009-017",
+        "S-009-022",
+        "S-009-018",
+        "S-009-019",
+        "S-009-020",
+        "S-009-021"
+      ]
+    },
+    {
+      "type": "release",
+      "id": "TR-001",
+      "title": "v1.0.0 Initial Launch",
+      "fields": {
+        "ID": "TR-001",
+        "Project": "roadscholar-mobile",
+        "Release": "R-001",
+        "Version": "1.0",
+        "Created": "2026-03-28",
+        "Updated": "2026-03-28"
+      },
+      "file": "TR-001-initial-launch.md",
+      "storyIds": [
+        "S-001-001",
+        "S-001-002",
+        "S-001-003",
+        "S-001-004",
+        "S-002-001",
+        "S-002-002",
+        "S-002-003",
+        "S-002-004",
+        "S-002-005",
+        "S-002-006",
+        "S-002-007",
+        "S-002-008",
+        "S-002-009",
+        "S-003-001",
+        "S-003-002",
+        "S-003-003",
+        "S-003-004",
+        "S-004-001",
+        "S-004-002",
+        "S-005-001",
+        "S-005-002",
+        "S-006-001",
+        "S-006-002",
+        "S-007-001",
+        "S-007-002",
+        "S-007-003",
+        "S-007-004",
+        "S-008-001"
+      ],
+      "flowId": "02_profile"
+    },
+    {
+      "type": "userflow",
+      "id": "UF-001",
+      "title": "Login & Onboarding",
+      "fields": {
+        "ID": "UF-001",
+        "Project": "roadscholar-mobile",
+        "Epic": "E-001",
+        "Persona": "First-time participant logging in and setting up their account",
+        "Stage": "Ready",
+        "Version": "1.0",
+        "Created": "2026-03-28",
+        "Updated": "2026-03-28"
+      },
+      "file": "UF-001-login-onboarding.md",
+      "storyIds": [
+        "S-001-001",
+        "S-001-002",
+        "S-001-003",
+        "S-001-004"
+      ],
+      "flowGraph": "flowchart TD\n    Entry([Entry: App Launch — unauthenticated]) --> Login[\"Screen: Login\"]\n    Login -->|\"Tap Sign In\"| SalesforceAuth[\"Screen: Salesforce OAuth\"]\n    SalesforceAuth -->|\"Auth success — first login\"| Welcome[\"Screen: Welcome\"]\n    SalesforceAuth -->|\"Auth success — returning user, biometric enabled\"| Home[\"Screen: Home\"]\n    SalesforceAuth -->|\"Auth success — returning user, no biometric\"| Home\n    SalesforceAuth -->|\"Auth failure\"| Login\n\n    Welcome --> OnboardingSetup[\"Modal: Onboarding Setup\"]\n    OnboardingSetup -->|\"Complete profile setup\"| NotificationPrompt[\"Screen: Push Notification Permission\"]\n    NotificationPrompt -->|\"Allow or Skip\"| OnboardingComplete[\"Screen: Onboarding Complete\"]\n    OnboardingComplete -->|\"Tap Get Started\"| Home\n\n    Entry2([Entry: App Launch — returning user, biometric enabled]) --> BiometricPrompt[\"Modal: Biometric Authentication\"]\n    BiometricPrompt -->|\"Success\"| Home\n    BiometricPrompt -->|\"Failure / Cancel\"| Login"
+    },
+    {
+      "type": "userflow",
+      "id": "UF-002",
+      "title": "Group Browsing & Discussion",
+      "fields": {
+        "ID": "UF-002",
+        "Project": "roadscholar-mobile",
+        "Epic": "E-002, E-006",
+        "Persona": "Participant browsing groups and engaging in forum discussion",
+        "Stage": "Ready",
+        "Version": "1.0",
+        "Created": "2026-03-28",
+        "Updated": "2026-03-28"
+      },
+      "file": "UF-002-group-browsing-discussion.md",
+      "storyIds": [
+        "S-002-001",
+        "S-002-002",
+        "S-002-003",
+        "S-002-004",
+        "S-002-005",
+        "S-002-006",
+        "S-002-007",
+        "S-002-008",
+        "S-002-009",
+        "S-006-001",
+        "S-006-002"
+      ],
+      "flowGraph": "flowchart TD\n    Entry([Entry: Home — tap group card]) --> GroupDetails[\"Screen: Group Details\"]\n\n    GroupDetails -->|\"Tap post\"| Post[\"Modal: Post Detail\"]\n    GroupDetails -->|\"Tap New Post\"| NewPost[\"Modal: New Post\"]\n    GroupDetails -->|\"Tap Media tab\"| MediaGallery[\"Screen: Media Gallery\"]\n    GroupDetails -->|\"Tap Members\"| MemberList[\"Screen: Group Members\"]\n    GroupDetails -->|\"Tap Program Info\"| GroupDetails\n\n    Post -->|\"Tap Reply\"| Post\n    Post -->|\"Tap Like\"| Post\n    Post -->|\"Tap Liked By count\"| LikedByModal[\"Modal: Liked By\"]\n    Post -->|\"Long press post/reply\"| ContextMenu[\"Popover: Context Menu\"]\n    LikedByModal -->|\"Dismiss\"| Post\n\n    ContextMenu -->|\"Edit (own content)\"| EditPost[\"Modal: Edit Post\"]\n    ContextMenu -->|\"Delete (own content)\"| DeleteConfirm[\"Modal: Delete Confirmation\"]\n    ContextMenu -->|\"Report\"| ReportConfirm[\"Modal: Report Abuse\"]\n    ContextMenu -->|\"Cancel\"| Post\n\n    EditPost -->|\"Save\"| Post\n    EditPost -->|\"Cancel\"| Post\n    DeleteConfirm -->|\"Confirm\"| GroupDetails\n    DeleteConfirm -->|\"Cancel\"| Post\n    ReportConfirm -->|\"Submit\"| Post\n    ReportConfirm -->|\"Cancel\"| Post\n\n    NewPost -->|\"Post — success\"| GroupDetails\n    NewPost -->|\"Cancel\"| GroupDetails\n\n    MediaGallery -->|\"Tap image\"| FullScreenImage[\"Modal: Full Screen Image\"]\n    FullScreenImage -->|\"Dismiss\"| MediaGallery\n\n    GroupDetails -->|\"Tap external link\"| Browser[\"Screen: Browser\"]\n    Browser -->|\"Back\"| GroupDetails"
+    },
+    {
+      "type": "userflow",
+      "id": "UF-003",
+      "title": "Profile Management",
+      "fields": {
+        "ID": "UF-003",
+        "Project": "roadscholar-mobile",
+        "Epic": "E-003",
+        "Persona": "Participant viewing and editing their profile",
+        "Stage": "Ready",
+        "Version": "1.0",
+        "Created": "2026-03-28",
+        "Updated": "2026-03-28"
+      },
+      "file": "UF-003-profile-management.md",
+      "storyIds": [
+        "S-003-001",
+        "S-003-002",
+        "S-003-003",
+        "S-003-004"
+      ],
+      "flowGraph": "flowchart TD\n    Entry([Entry: Home — tap profile icon]) --> Profile[\"Screen: Profile\"]\n\n    Profile -->|\"Tap Edit Profile\"| EditProfile[\"Screen: Edit Profile\"]\n    Profile -->|\"Tap Hobbies\"| EditHobbies[\"Modal: Edit Hobbies\"]\n    Profile -->|\"Tap Settings\"| Settings[\"Screen: Settings\"]\n\n    EditProfile -->|\"Tap Avatar\"| AvatarPicker[\"Overlay: Image Picker\"]\n    AvatarPicker -->|\"Select photo\"| EditProfile\n    AvatarPicker -->|\"Cancel\"| EditProfile\n    EditProfile -->|\"Save\"| Profile\n    EditProfile -->|\"Back\"| Profile\n\n    EditHobbies -->|\"Save\"| Profile\n    EditHobbies -->|\"Cancel\"| Profile",
+      "flowId": "02_profile"
+    },
+    {
+      "type": "userflow",
+      "id": "UF-004",
+      "title": "Group Leader Management",
+      "fields": {
+        "ID": "UF-004",
+        "Project": "roadscholar-mobile",
+        "Epic": "E-004",
+        "Persona": "Group leader finding and joining their assigned trip groups",
+        "Stage": "Ready",
+        "Version": "1.0",
+        "Created": "2026-03-28",
+        "Updated": "2026-03-28"
+      },
+      "file": "UF-004-group-leader-management.md",
+      "storyIds": [
+        "S-004-001",
+        "S-004-002"
+      ],
+      "flowGraph": "flowchart TD\n    Entry([Entry: Home — tap Group Leader]) --> LeaderTrips[\"Screen: Group Leader Trips\"]\n\n    LeaderTrips -->|\"Tap Join Group\"| JoinGroup[\"Screen: Join Group\"]\n    LeaderTrips -->|\"Tap group\"| GroupDetails[\"Screen: Group Details\"]\n\n    JoinGroup -->|\"Enter program number — search\"| JoinGroup\n    JoinGroup -->|\"Tap Join on result\"| GroupDetails\n    JoinGroup -->|\"Back\"| LeaderTrips"
+    },
+    {
+      "type": "userflow",
+      "id": "UF-005",
+      "title": "Offline & Reliability",
+      "fields": {
+        "ID": "UF-005",
+        "Project": "roadscholar-mobile",
+        "Epic": "E-007",
+        "Persona": "Participant on a trip with intermittent or absent connectivity (national park, international destination, motorcoach in transit)",
+        "Stage": "Ready",
+        "Version": "1.0",
+        "Created": "2026-05-22",
+        "Updated": "2026-05-22"
+      },
+      "file": "UF-005-offline-resilience.md",
+      "storyIds": [
+        "S-007-001",
+        "S-007-002",
+        "S-007-003",
+        "S-007-004"
+      ],
+      "flowGraph": "flowchart TD\n    Online([State: Online — normal app use]) -->|\"Network drops (NetInfo callback)\"| OfflineBanner[\"Overlay: NoInternetNotifier\"]\n    Online -->|\"App force-closed, relaunched while offline\"| ColdOffline[\"State: Cold start, no network\"]\n\n    ColdOffline --> ReadCache[\"Fragment: Cached groups, threads, photos\"]\n    ReadCache -.->|\"redux-persist rehydrates whitelisted slices\"| OfflineBanner\n\n    OfflineBanner --> ReadCache\n    ReadCache -->|\"Tap a like\"| OptimisticLike[\"Fragment: Like count updates immediately\"]\n    OptimisticLike -.->|\"enqueueLikeMutation()\"| Queue[\"State: offlineQueue.likeMutations\"]\n    Queue -.->|\"Same thread, opposite action\"| Queue\n\n    ReadCache -->|\"Try to compose a post\"| PostFails[\"Overlay: NoInternetFailedPostBanner\"]\n    PostFails -.->|\"Post not queued — see Do Not Do on S-007-002\"| ReadCache\n\n    ReadCache -->|\"Try to comment\"| CommentBlocked[\"Fragment: Comment input disabled\"]\n    ReadCache -->|\"Try to play a video\"| VideoPlaceholder[\"Fragment: Video placeholder / error state\"]\n\n    OfflineBanner -->|\"Network returns (NetInfo callback)\"| Reconnect[\"State: Reconnecting\"]\n    Reconnect -->|\"401 on next call → refresh token\"| TokenRefresh[\"Fragment: Silent token refresh\"]\n    Reconnect -->|\"No 401\"| ProcessQueue[\"Fragment: Process likeMutations queue\"]\n    TokenRefresh --> ProcessQueue\n    ProcessQueue -->|\"Tag invalidation refreshes cached data\"| Online\n    ProcessQueue -.->|\"Per-item failure stays in queue, retried next reconnect\"| Queue\n\n    OfflineBanner -->|\"Launch while build < requiredVersion (independent of offline state)\"| ForcedUpdate[\"Modal: Required Update Alert\"]\n    ForcedUpdate -->|\"OK\"| Store([Exit: App Store / Play Store])"
+    },
+    {
+      "type": "userflow",
+      "id": "UF-006",
+      "title": "QA Login Regression — Implement & Execute TF-001",
+      "fields": {
+        "ID": "UF-006",
+        "Project": "roadscholar-mobile",
+        "Epic": "E-009",
+        "Persona": "QA agent implementing and executing the login flow regression suite",
+        "Stage": "Ready",
+        "Version": "1.0",
+        "Created": "2026-06-05",
+        "Updated": "2026-06-05"
+      },
+      "file": "UF-006-qa-login-regression.md",
+      "storyIds": [
+        "S-009-003",
+        "S-009-001",
+        "S-009-002",
+        "S-009-004",
+        "S-009-005",
+        "S-010-004",
+        "S-009-017"
+      ],
+      "flowGraph": "flowchart TD\n    Entry([Entry: S-009-003 picked up — Status: In Progress]) --> PrereqCheck[\"Screen: Prerequisite Verification\"]\n\n    PrereqCheck -->|\"S-009-001 Done + S-009-002 Done\"| PlanReview[\"Screen: TF-001 Plan Review\"]\n    PrereqCheck -->|\"Missing prerequisite\"| EXT_Blocked([Exit: Blocked — return to Backlog])\n\n    PlanReview -->|\"Journey A + B scope confirmed\"| TestIDAudit[\"Screen: testID Gap Audit\"]\n\n    TestIDAudit -->|\"Gaps found on Login / Welcome / Onboarding screens\"| TestIDFix[\"Screen: testID Gap Fill\"]\n    TestIDAudit -->|\"No gaps\"| AuthorA\n\n    TestIDFix --> AuthorA[\"Screen: Journey A Maestro Authoring\"]\n\n    AuthorA -->|\"journey-a-full-onboard.yaml written\"| AuthorB[\"Screen: Journey B Maestro Authoring\"]\n\n    AuthorB -->|\"journey-b-minimal-onboard.yaml written\"| IndexCreate[\"Fragment: Create index.yaml\"]\n\n    IndexCreate -->|\"index.yaml wires A + B\"| RunAndroid[\"Screen: Local Run — Android Emulator\"]\n\n    RunAndroid -->|\"Both journeys pass\"| RunIOS[\"Screen: Local Run — iOS Simulator\"]\n    RunAndroid -->|\"Failure\"| Triage[\"Screen: Failure Triage\"]\n\n    RunIOS -->|\"Both journeys pass\"| EvidenceCheck[\"Screen: Evidence Verification\"]\n    RunIOS -->|\"iOS-specific failure\"| PlatformSplit[\"Screen: Platform-Specific YAML Split\"]\n\n    PlatformSplit -->|\"Platform file authored\"| RunIOS\n\n    Triage -->|\"Flow YAML fix\"| AuthorA\n    Triage -->|\"testID fix\"| TestIDFix\n    Triage -->|\"App bug discovered\"| EXT_Bug([Exit: File BUG-NNN + return to Triage])\n\n    EvidenceCheck -->|\"Every ✓ Verify checkpoint has a screenshot\"| RunLog[\"Fragment: Append TF-001 Run Log\"]\n    EvidenceCheck -->|\"Missing checkpoint evidence\"| AuthorA\n\n    RunLog --> CIPush[\"Screen: CI Integration — Bitrise PR Check\"]\n\n    CIPush -->|\"PR check green\"| Complete([Exit: S-009-003 Done])\n    CIPush -->|\"PR check red\"| SlackAlert[\"Fragment: Slack Failure Alert\"]\n\n    SlackAlert --> Triage"
+    }
+  ],
+  "releases": [
+    {
+      "id": "R-001",
+      "title": "v1.0.0 Initial Launch",
+      "trId": "TR-001"
+    },
+    {
+      "id": "R-002",
+      "title": "v1.5.0 Active Development",
+      "trId": null
+    },
+    {
+      "id": "R-003",
+      "title": "Quality Foundation + Native Auth",
+      "trId": null
+    },
+    {
+      "id": "R-004",
+      "title": "Full QA Coverage Expansion — Candidate scope (not yet committed)",
+      "trId": null
+    }
+  ]
+}

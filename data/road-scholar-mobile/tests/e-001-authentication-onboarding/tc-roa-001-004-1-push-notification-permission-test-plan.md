@@ -2,7 +2,7 @@
 id: TC-ROA-001-004-1
 title: Push Notification Permission — Test Plan
 category: e-001-authentication-onboarding
-scenario: Negative
+scenario: Happy Path
 status: not-run
 priority: P2
 platforms:
@@ -12,7 +12,7 @@ tags:
   - s-001-004
   - e-001
 created: '2026-05-26'
-updated: '2026-05-26'
+updated: '2026-06-08'
 pmagent_source:
   slug: roadscholar-mobile
   story_id: S-001-004

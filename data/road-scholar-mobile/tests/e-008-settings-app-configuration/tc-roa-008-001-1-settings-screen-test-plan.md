@@ -2,7 +2,7 @@
 id: TC-ROA-008-001-1
 title: Settings Screen — Test Plan
 category: e-008-settings-app-configuration
-scenario: Negative
+scenario: Happy Path
 status: not-run
 priority: P3
 platforms:
@@ -12,7 +12,7 @@ tags:
   - s-008-001
   - e-008
 created: '2026-05-26'
-updated: '2026-05-26'
+updated: '2026-06-08'
 pmagent_source:
   slug: roadscholar-mobile
   story_id: S-008-001

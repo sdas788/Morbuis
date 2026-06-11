@@ -2,7 +2,7 @@
 id: TC-ROA-001-001-1
 title: Salesforce SSO Login — Test Plan
 category: e-001-authentication-onboarding
-scenario: Negative
+scenario: Happy Path
 status: not-run
 priority: P1
 platforms:
@@ -12,7 +12,7 @@ tags:
   - s-001-001
   - e-001
 created: '2026-05-26'
-updated: '2026-05-26'
+updated: '2026-06-08'
 pmagent_source:
   slug: roadscholar-mobile
   story_id: S-001-001

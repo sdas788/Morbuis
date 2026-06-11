@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null; [ -f dist/index.js ] && node dist/index.js doctor 2>&1 || true",
+            "statusMessage": "Running Morbius harness doctor…",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

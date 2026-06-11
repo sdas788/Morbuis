@@ -2,7 +2,7 @@
 id: TC-ROA-004-001-1
 title: Search & Join Group — Test Plan
 category: e-004-group-leader-tools
-scenario: Negative
+scenario: Happy Path
 status: not-run
 priority: P2
 platforms:
@@ -12,7 +12,7 @@ tags:
   - s-004-001
   - e-004
 created: '2026-05-26'
-updated: '2026-05-26'
+updated: '2026-06-08'
 pmagent_source:
   slug: roadscholar-mobile
   story_id: S-004-001

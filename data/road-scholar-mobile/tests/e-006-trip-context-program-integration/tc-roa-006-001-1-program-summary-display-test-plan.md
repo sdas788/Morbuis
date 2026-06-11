@@ -2,7 +2,7 @@
 id: TC-ROA-006-001-1
 title: Program Summary Display — Test Plan
 category: e-006-trip-context-program-integration
-scenario: Negative
+scenario: Happy Path
 status: not-run
 priority: P2
 platforms:
@@ -12,7 +12,7 @@ tags:
   - s-006-001
   - e-006
 created: '2026-05-26'
-updated: '2026-05-26'
+updated: '2026-06-08'
 pmagent_source:
   slug: roadscholar-mobile
   story_id: S-006-001

@@ -199,21 +199,12 @@
       "id": "road-scholar-mobile",
       "name": "Road Scholar Mobile",
       "created": "2026-05-26",
+      "appId": "com.roadscholar.mobile.dev",
       "devices": [
-        {
-          "id": "ipad",
-          "name": "iPad",
-          "platform": "ios"
-        },
         {
           "id": "iphone",
           "name": "iPhone",
           "platform": "ios"
-        },
-        {
-          "id": "android-tab",
-          "name": "Android Tablet",
-          "platform": "android"
         },
         {
           "id": "android-phone",
@@ -222,7 +213,10 @@
         }
       ],
       "pmagentSlug": "roadscholar-mobile",
-      "projectType": "mobile"
+      "projectType": "mobile",
+      "reviewEpics": [
+        "e-009"
+      ]
     }
   ]
 }
